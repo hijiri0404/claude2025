@@ -1,0 +1,26 @@
+{
+  "name": "bedrock-image-generator",
+  "version": "1.0.0",
+  "description": "Lambda function for generating images using Amazon Bedrock",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": [
+    "bedrock",
+    "image-generation",
+    "lambda"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.138",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
