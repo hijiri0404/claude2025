@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to www.hijiri0404.link</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #333;
+        }
+
+        .container {
+            background: white;
+            padding: 3rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 600px;
+            animation: fadeIn 0.8s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            text-align: left;
+            border-radius: 8px;
+        }
+
+        .info-box h2 {
+            color: #667eea;
+            font-size: 1.3rem;
+            margin-bottom: 1rem;
+        }
+
+        .info-box ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .info-box li {
+            padding: 0.5rem 0;
+            color: #555;
+        }
+
+        .info-box li::before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .tech-stack {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.8rem;
+            justify-content: center;
+            margin-top: 2rem;
+        }
+
+        .tech-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .footer {
+            margin-top: 2rem;
+            color: #999;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 Welcome!</h1>
+        <p class="subtitle">静的サイトが正常に動作しています</p>
+
+        <div class="info-box">
+            <h2>📋 サイト情報</h2>
+            <ul>
+                <li>ドメイン: www.hijiri0404.link</li>
+                <li>ホスティング: Amazon S3</li>
+                <li>CDN: Amazon CloudFront</li>
+                <li>DNS: Amazon Route 53</li>
+                <li>SSL/TLS: AWS Certificate Manager</li>
+            </ul>
+        </div>
+
+        <div class="tech-stack">
+            <span class="tech-badge">CloudFront</span>
+            <span class="tech-badge">S3</span>
+            <span class="tech-badge">Route 53</span>
+            <span class="tech-badge">ACM</span>
+            <span class="tech-badge">HTTPS</span>
+        </div>
+
+        <div class="footer">
+            <p>Powered by AWS | CloudFront + S3 Static Website</p>
+            <p>© 2025 hijiri0404.link</p>
+        </div>
+    </div>
+</body>
+</html>
