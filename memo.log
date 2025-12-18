@@ -2,7 +2,69 @@
 開始日: 2025-08-23
 目標: MCP サーバ設定情報をCLAUDE.mdに追加し、新環境での設定手順を確立
 
-## 最新セッション: 2025-10-31
+## 最新セッション: 2025-12-11
+### CloudFront + S3 静的Webサイト構築（カスタムドメイン対応）
+- **状態**: ✅ 完了
+- **主要成果**:
+  - CloudFront + S3による静的Webサイト構築完了
+  - カスタムドメイン（www.hijiri0404.link）でHTTPSアクセス可能
+  - Origin Access Control (OAC)によるセキュアなS3アクセス制御
+  - ACM証明書（us-east-1）の取得と自動検証
+  - Route53 Aliasレコード設定完了
+- **技術スタック**:
+  - Amazon CloudFront (Distribution ID: EEGQIBAL9KXND)
+  - Amazon S3 (www-hijiri0404-link)
+  - AWS Certificate Manager (ACM) - us-east-1
+  - Amazon Route 53 (Hosted Zone ID: Z05608792OMRUEGE6GF3A)
+  - Origin Access Control (OAC ID: E34MUDWFZNL89N)
+- **生成ファイル**: 3ファイル
+  - CloudFront-S3-StaticWebsite-DeployGuide.md（包括的デプロイガイド）
+  - index.html（サンプル静的サイト）
+  - SUMMARY.md（作業概要）
+- **ファイル場所**: `/workspaces/ubuntu-3/claude2025/work/20251211/`
+- **重要な学習**:
+  - ACM証明書はCloudFront用に必ずus-east-1リージョンで作成する必要がある
+  - Origin Access Control (OAC)は新しい推奨方式（従来のOAIから移行）
+  - Route53 AliasレコードでCloudFrontのHostedZone ID固定値使用: Z2FDTNDATAQYW2
+  - aws-documentation-mcp-server活用で最新ベストプラクティス取得
+- **セキュリティ実装**:
+  - HTTPS強制リダイレクト（redirect-to-https）
+  - TLS 1.2+ 最小プロトコルバージョン
+  - S3パブリックアクセス完全ブロック
+  - CloudFrontサービスプリンシパルベースのアクセス制御
+- **アクセスURL**: https://www.hijiri0404.link
+
+## 過去セッション: 2025-11-30
+### AWS Cognito認証システム完全実装プロジェクト（3セッション完結）
+- **状態**: 全セッション完了、すべてのリソース削除済み
+- **主要成果**:
+  - セッション1: CLI認証フロー完全ドキュメント作成（6ステップ認証フロー）
+  - セッション2: IaC実装（CDK + Terraform両方の完全実装）
+  - セッション3: リソースライフサイクル管理（削除→CDKデプロイ→削除）
+- **技術スタック**:
+  - AWS Cognito (User Pools, Identity Pools)
+  - AWS IAM (Role, Policy with policy variables)
+  - AWS CDK (TypeScript), Terraform (HCL)
+  - AWS CLI認証フロー
+- **生成ファイル**: 14ファイル、約2,500行（コメント・ドキュメント含む）
+- **ファイル場所**: `/workspaces/ubuntu-3/claude2025/work/20251130/`
+- **主要ドキュメント**:
+  - `AWS-Cognito-CLI認証フロー完全ガイド.md`
+  - `cdk-cognito/README.md` (376行)
+  - `terraform-cognito/README.md` (602行)
+  - `SUMMARY.md` (v3.0.0 - セッション1-3統合版)
+- **トラブルシューティング実績**:
+  - User Pool削除保護エラー → 解除手順確立
+  - User Pool Domain依存エラー → 削除順序確立
+  - TypeScript tslib不足 → npm依存関係追加
+  - CDK CLI未検出 → npx活用パターン確立
+- **学習成果**:
+  - IaC（CDK/Terraform）vs CLI手動管理の比較
+  - CloudFormationによる依存関係自動処理の有効性
+  - Cognitoリソース削除の正しい順序
+  - IAMポリシー変数によるユーザー別アクセス制御
+
+## 過去セッション: 2025-10-31
 ### Web小説ダウンローダー開発プロジェクト
 - **状態**: 基本機能完成、一部制限事項あり
 - **主要成果**: Brotli圧縮対応、403エラー対策、プラグイン式アーキテクチャ実装
@@ -727,3 +789,568 @@ AWS CLI v2のbase64問題も即座に解決できちゃった🚀
 - テスト用秘密鍵を11パス上書き削除で完全消去
 - 秘密鍵漏洩時の対応手順を文書化
 
+
+=== 2025-11-28 ===
+[完了] AWS Bedrock画像生成Webサイトの完全実装（アーキテクチャ設計＋AWS CDK）
+- アーキテクチャ設計: 10コンポーネントの完全サーバーレス構成（Cognito、API Gateway、Lambda、Bedrock、S3、CloudFront）
+- データフロー: ユーザー認証→API呼び出し→Bedrock画像生成→S3保存→CloudFront配信の10ステップ
+- セキュリティ: JWT認証、TLS/SSL暗号化、IAM最小権限、CDK Nag自動チェック、OAI設定
+- AWS CDK実装: TypeScript 2,121行（CDKスタック475行、Lambda353行、設定・ドキュメント1,293行）
+- Lambda機能: Stable Diffusion XL & Titan Image Generator両対応、S3統合、エラーハンドリング
+- 主要リソース: Cognito User Pool、S3 x2、Lambda、API Gateway、CloudFront、IAM Roles
+- API仕様: POST /prod/generate（JWT認証、プロンプトベース、パラメータカスタマイズ可能）
+- コスト試算: 月額$239-439（1,000ユーザー、10,000枚想定、Bedrock生成コストが主要部分）
+- ドキュメント: 包括的README（10,563文字）、8フェーズデプロイガイド（11,300文字）、アーキテクチャ文書（7,851文字）
+- セキュリティ実装: S3暗号化、バージョニング、CloudFront HTTPS強制、Cognitoパスワードポリシー
+- ベストプラクティス: CDK Nag統合、TypeScript型安全性、CloudFormation出力、最小権限IAM
+- ファイル構成: 14ファイル（bin/app.ts、lib/stack、lambda/、設定、ドキュメント3種、アーキテクチャ図）
+- 重要前提条件: Bedrockモデルアクセス申請必須（Stable Diffusion XL、Titan Image Generator）
+- デプロイ時間: 10-15分（CloudFront Distributionが最長）
+- MCPサーバ使用: aws-diagram-mcp-server（アイコン検索、図生成）、cdk-mcp-server（CDKガイダンス、GenAI Constructs）
+- 技術領域: AWS CDK, Amazon Bedrock, Cognito, Lambda, API Gateway, S3, CloudFront, サーバーレス, IaC
+
+## ✅ セッション完了 - 2025-11-28
+
+### 📋 完了タスク
+- [x] 日付ベース作業フォルダ作成（20251128）
+- [x] AWS Bedrockアイコン含むサービスアイコン確認
+- [x] アーキテクチャ図生成（PNG形式、10コンポーネント）
+- [x] アーキテクチャ詳細ドキュメント作成（7,851文字）
+- [x] CDK一般ガイダンス取得
+- [x] GenAI CDK Constructs調査
+- [x] CDKプロジェクト構造設計・実装
+- [x] プロジェクト設定ファイル作成（package.json、cdk.json、tsconfig.json、.gitignore）
+- [x] CDKアプリケーションエントリポイント作成（bin/app.ts）
+- [x] CDKスタック実装（Cognito、S3、Lambda、API Gateway、CloudFront、IAM）
+- [x] Lambda関数実装（Bedrock統合、2モデル対応、S3統合）
+- [x] CDK Nag統合（セキュリティベストプラクティス）
+- [x] README.md作成（10,563文字）
+- [x] DEPLOYMENT_GUIDE.md作成（11,300文字、8フェーズチェックリスト）
+- [x] SUMMARY.md作成・更新（完全版）
+- [x] Git管理（14ファイルコミット）
+
+### 🎯 技術的成果
+**アーキテクチャ**:
+- 完全サーバーレス構成（運用コスト最小化）
+- 多層セキュリティ（JWT + TLS + IAM + OAI）
+- グローバルCDN配信（CloudFront）
+- 自動スケーリング対応
+
+**実装品質**:
+- TypeScript型安全性
+- CDK Nag自動セキュリティチェック
+- 包括的エラーハンドリング
+- CloudFormation出力による自動設定
+
+**ドキュメント**:
+- 3種類の包括的ドキュメント（29,714文字）
+- 8フェーズデプロイチェックリスト
+- トラブルシューティングガイド
+- API仕様とコード例
+
+### 📁 成果物（work/20251128/）
+```
+.
+├── generated-diagrams/
+│   └── bedrock-image-generation-architecture.png.png
+├── bedrock-image-generation-architecture.md (7,851文字)
+├── bin/
+│   └── app.ts (CDKエントリポイント、CDK Nag統合)
+├── lib/
+│   └── bedrock-image-gen-stack.ts (475行、全リソース定義)
+├── lambda/
+│   └── image-generator/
+│       ├── index.ts (353行、Bedrock統合)
+│       ├── package.json
+│       └── tsconfig.json
+├── package.json (CDK依存関係)
+├── cdk.json (CDK設定)
+├── tsconfig.json (TypeScript設定)
+├── .gitignore (Git除外パターン)
+├── README.md (10,563文字)
+├── DEPLOYMENT_GUIDE.md (11,300文字)
+└── SUMMARY.md (完全版作業記録)
+```
+
+### 💡 学習ポイント
+1. AWS CDKによる複雑なサーバーレスアーキテクチャの実装
+2. Amazon Bedrockの画像生成API統合（2モデル対応）
+3. Cognitoベース認証システムの設計
+4. CloudFront + S3 + OAIによるセキュアな配信
+5. CDK Nagによるセキュリティベストプラクティス適用
+6. Lambda関数でのAWS SDK v3使用（Bedrock Runtime、S3）
+7. TypeScriptによる型安全なIaC開発
+
+### 📊 プロジェクト規模
+- **総ファイル数**: 14ファイル
+- **総コード行数**: 2,121行
+- **ドキュメント**: 29,714文字（3ファイル）
+- **技術スタック**: 10+ AWSサービス
+- **実装時間**: 約3時間
+
+### 🚀 Next Actions（オプション）
+1. 実際のデプロイ実行（`npm run deploy`）
+2. Cognitoユーザー作成とAPI動作確認
+3. フロントエンドアプリケーション開発
+4. カスタムドメイン設定
+5. 本番環境最適化（WAF、監視、アラート）
+
+
+## 2025-12-11 - EKS業務システム クラスタ構成比較分析
+
+### 🎯 作業内容
+- 3つの業務システムをEKS上にデプロイする際のアーキテクチャ選択肢を分析
+- Pattern A (1クラスタ + Namespace分離) vs Pattern B (3独立クラスタ) の包括的比較
+
+### 📊 主要な成果
+1. **コスト分析**: Pattern A (¥11,129/年) vs Pattern B (¥33,388/年)
+   - Pattern Bは約3倍のコスト（年間¥22,259の追加コスト）
+   
+2. **運用負荷分析**: Pattern Aは管理対象が1/3に削減
+   - アップグレード、監視、バックアップの工数が3分の1
+   
+3. **セキュリティ分析**:
+   - Pattern A: Namespace + Network Policy + RBAC + Resource Quota
+   - Pattern B: クラスタレベルの完全分離（最強のセキュリティ境界）
+   - AWS公式ドキュメントの重要な知見: "クラスタは唯一の強固なセキュリティ境界"
+
+### 📁 成果物
+- `/work/20251211/EKS業務システム_クラスタ構成比較分析.md` (17.8KB)
+  - 6つの評価軸での詳細比較
+  - 実装可能なKubernetes YAML例
+  - 意思決定フローチャート
+  - ユースケース別推奨パターン
+  
+- `/work/20251211/SUMMARY.md` (更新)
+  - 2つのタスク（CloudFront+S3、EKS分析）の統合サマリー
+
+### 🔧 使用したMCPサーバ
+1. **aws-documentation-mcp-server**:
+   - EKSマルチテナンシーベストプラクティス検索
+   - テナント分離戦略ドキュメント取得
+   - セキュリティベストプラクティス確認
+   
+2. **aws-api-mcp-server**:
+   - EKS料金情報取得（ap-northeast-1）
+   - 正確なコスト試算実施
+
+### ✅ 推奨結論
+- **一般的な業務システム**: Pattern A (1クラスタ) を推奨
+  - コスト効率: 67%削減
+  - 運用効率: 3倍向上
+  - 適切なセキュリティ実装で十分な分離レベル確保可能
+  
+- **高セキュリティ要件**: Pattern B (3クラスタ) を推奨
+  - 金融システム、医療システム
+  - 規制・コンプライアンス要件
+  - クラスタレベルの完全分離が必須の場合
+
+### 💡 重要な学び
+1. EKSコントロールプレーンの固定費（$0.10/時）が小規模環境では大きな負担
+2. Kubernetes Namespaceは論理分離として有効だが、クラスタレベルの分離には及ばない
+3. セキュリティ要件とコスト・運用効率のトレードオフを適切に判断することが重要
+4. AWS公式ドキュメントに基づく技術的根拠の重要性
+
+### 📚 参照ドキュメント
+- AWS EKS Best Practices - Tenant Isolation
+- AWS EKS Security Best Practices
+- AWS EKS Pricing (ap-northeast-1)
+
+### ⏭️ Next Steps（オプション）
+- 実際の業務システム要件のヒアリング
+- セキュリティ要件の詳細確認
+- コンプライアンス要件の確認
+- 具体的なKubernetes実装の設計
+
+---
+
+## 2025-12-18: CloudFront + WAFメンテナンスモード実装（予算優先パターン）💰
+
+### 🎯 プロジェクト概要
+AWS WAF Custom Responseを使用した、最もコスト効率の良いメンテナンスモード実装パターンの完全ガイド作成。Lambda@Edge不使用で月額$5削減し、WAFルール変更による5-30秒の高速切り替えを実現。4KB HTML制限内でカウントダウンタイマー付きSorryページを実装。
+
+### 🏗️ アーキテクチャ要件（予算優先パターン）
+1. **Lambda@Edge不使用**: コスト削減とシンプル化
+2. **WAF Custom Response**: 4KB HTMLによるSorryページ配信
+3. **高速切り替え**: 5-30秒でメンテナンスモード切り替え
+4. **EventBridge Scheduler**: 事前スケジューリング対応
+5. **Parameter Store**: 状態管理の中央化
+6. **IP Set Reference**: 管理者バイパス機能
+
+### 📁 成果物（2ファイル）
+**プロジェクトディレクトリ**: `/work/20251218/`
+
+#### 実装ガイド
+- `CloudFront-WAF-メンテナンスモード実装ガイド-予算優先パターン.md` (35,679 bytes)
+  - アーキテクチャ概要と切り替え時間分析（5-30秒）
+  - 完全なCDK実装コード（TypeScript 475行）
+  - Lambda関数コード（enable/disable maintenance）
+  - 4KB最適化SorryページHTML（カウントダウンタイマー付き）
+  - EventBridge Scheduler設定例
+  - Parameter Store統合
+  - 段階的デプロイ手順
+  - 運用マニュアル（手動切り替え、自動スケジューリング）
+  - コスト試算（$15.70-$21.02/月 for 1M PV）
+  - トラブルシューティングガイド
+  - FAQ（7項目）
+
+#### ドキュメント
+- `SUMMARY.md` (完全版作業記録)
+
+### 💰 コスト分析
+
+#### 月間推定コスト（1M PV）
+**合計**: $15.70-$21.02/月
+
+- CloudFront: $9.50（リクエスト+データ転送）
+- AWS WAF: $6.00（WebACL + ルール + リクエスト）
+- Lambda: $0.20（無料枠内）
+- Parameter Store: 無料
+- EventBridge Scheduler: 無料
+
+#### パターン比較
+| パターン | 月額コスト | 切り替え時間 | HTML制限 |
+|---------|-----------|------------|---------|
+| 予算優先（WAF） | $15.70-$21.02 | 5-30秒 | 4KB |
+| Lambda@Edge（無キャッシュ） | $20.90-$26.22 | 即座 | 無制限 |
+| Lambda@Edge（5分キャッシュ） | $15.88-$21.20 | 即座 | 無制限 |
+
+**コスト削減効果**: Lambda@Edge比で約$5/月削減
+
+### 🚀 技術的成果
+
+#### 1. **高速切り替えメカニズム**⭐
+**5-30秒の内訳**:
+1. Lambda実行（Parameter Store更新）: 1-3秒
+2. WAFルール更新API実行: 1-2秒
+3. WAFルール全エッジロケーション伝播: 5-30秒
+
+**CloudFront Distribution更新との比較**:
+- CloudFront設定変更: 15-30分
+- WAFルール変更: 5-30秒
+- **30-180倍高速化**
+
+#### 2. **4KB HTML最適化テクニック**
+- HTML minification（空白・改行削除）
+- inline CSS（外部CSSなし）
+- JavaScript圧縮（カウントダウンタイマー実装）
+- UTF-8エンコーディング最適化
+- **最終サイズ**: 3,845文字（4KB以内）
+
+#### 3. **EventBridge Scheduler統合**
+```typescript
+scheduleExpression: `at(2025-12-24T00:00:00)`,
+scheduleExpressionTimezone: 'Asia/Tokyo',
+```
+- タイムゾーン指定可能（JST対応）
+- 一回限り・繰り返し両対応
+- 自動リトライ設定
+
+#### 4. **CDK実装パターン**
+- WebACL + CustomResponseBodies定義
+- IP Set Reference Statement（管理者バイパス）
+- Lambda関数（WAF UpdateWebACL API使用）
+- Parameter Store統合
+- IAM最小権限設定
+
+### 🔐 セキュリティ実装
+1. **IP制限**: WAF IP Set（最大10,000 IP対応）
+2. **状態管理**: Parameter Store（暗号化対応）
+3. **アクセス制御**: IAM最小権限
+4. **通信暗号化**: HTTPS強制（TLS 1.2+）
+5. **監視**: CloudWatch Logs + WAF Metrics
+
+### 🧪 主要機能
+
+#### Lambda関数 - メンテナンスモード有効化
+```javascript
+// 1. Parameter Store更新
+await ssmClient.send(new PutParameterCommand({
+  Name: process.env.PARAMETER_NAME,
+  Value: 'true',
+  Overwrite: true,
+}));
+
+// 2. WAFルール変更（Count → Block with Custom Response）
+await wafClient.send(new UpdateWebACLCommand({
+  Rules: updatedRules, // MaintenanceModeルールをBlock化
+}));
+```
+
+#### 4KB SorryページHTML
+- レスポンシブデザイン（モバイル対応）
+- CSS Animation（fadeIn, pulse, spin）
+- JavaScriptカウントダウンタイマー
+- 動的メンテナンス終了時刻表示
+- グラデーション背景（linear-gradient）
+
+### 📊 技術的学び
+
+#### 重要な発見
+1. **WAFルール伝播速度**: CloudFrontより圧倒的に高速（5-30秒 vs 15-30分）
+2. **Custom Response制限**: 4KBでも十分リッチなUIが実現可能
+3. **Lambda実行最小化**: Parameter StoreでLambdaは切り替え時のみ実行
+4. **IP Set活用**: 最大10,000 IPまで管理者バイパス設定可能
+5. **EventBridge柔軟性**: タイムゾーン指定、一回限り・繰り返し両対応
+
+#### アーキテクチャ選択基準
+- **予算最優先 + 切り替え速度重視**: 今回のWAFパターン（推奨）
+- **UX最優先（リッチHTML必須）**: Lambda@Edge + キャッシュ
+- **緊急度低い + 最小コスト**: 手動切り替え
+
+### 🔧 使用したMCPサーバ
+1. **aws-documentation-mcp-server**:
+   - WAF Custom Response機能調査
+   - EventBridge Scheduler設定確認
+   - Parameter Store最適化パターン
+
+### 🎓 前セッション（20251217）との違い
+
+| 項目 | 前回（Lambda@Edge） | 今回（WAF Custom Response） |
+|------|-------------------|---------------------------|
+| コスト | $20.90-$26.22/月 | $15.70-$21.02/月 |
+| Lambda | Lambda@Edge（複雑） | 通常Lambda（シンプル） |
+| HTML制限 | 無制限 | 4KB |
+| 切り替え速度 | 即座（キャッシュ依存） | 5-30秒（WAF伝播） |
+| 実装複雑度 | 高 | 低 |
+| 運用性 | 中 | 高（シンプル） |
+
+**結論**: 予算優先＆シンプルなSorryページで十分な場合は、今回のWAFパターンが最適。
+
+### 📚 ドキュメント構成（10章）
+1. アーキテクチャ概要
+2. なぜ5-30秒で切り替え可能か
+3. 完全なCDK実装コード
+4. 4KB Sorryページ実装
+5. デプロイ手順
+6. 運用手順
+7. モニタリング
+8. コスト試算
+9. トラブルシューティング
+10. FAQ
+
+### 🏆 プロジェクト完了確認
+- ✅ アーキテクチャ設計完了
+- ✅ CDKスタック実装完了
+- ✅ Lambda関数実装完了
+- ✅ 4KB SorryページHTML作成完了
+- ✅ EventBridge Scheduler設定例完了
+- ✅ 包括的ドキュメント作成完了
+- ✅ コスト分析・比較完了
+- ✅ SUMMARY.md作成完了
+
+**総作業時間**: 約2時間
+**成果物総文字数**: 35,679文字
+**技術スタック**: AWS CDK (TypeScript), Lambda (Node.js), CloudFront, WAF, EventBridge, Parameter Store
+
+---
+
+## 2025-12-17: CloudFront + S3 静的サイト + メンテナンスモード実装 🚀
+
+### 🎯 プロジェクト概要
+AWS CDK (TypeScript) を使用して、CloudFront + S3による静的Webサイトに「メンテナンスモード（Sorryページ）」機能を実装。WAF IP Setによる特定IPのバイパス機能と、Lambda@Edgeによる時間帯ベースのSorryページ表示機能を統合。
+
+### 🏗️ アーキテクチャ要件
+1. **メンテナンスモード制御の3層構造**:
+   - レイヤー1: メンテナンスフラグ（有効/無効）
+   - レイヤー2: IP許可リスト（WAF IP Set）
+   - レイヤー3: 時間帯チェック（開始・終了時刻）
+
+2. **主要コンポーネント**:
+   - CloudFront Distribution (複数オリジン対応)
+   - S3 Bucket × 2 (Main Site / Sorry Page)
+   - AWS WAF WebACL + IP Set
+   - Lambda@Edge (Origin Request)
+   - SSM Parameter Store (設定管理)
+   - Origin Access Control (OAC)
+
+### 📁 成果物（14ファイル）
+**プロジェクトディレクトリ**: `/work/20251217/cloudfront-sorry-cdk/`
+
+#### CDK Infrastructure
+- `lib/cloudfront-sorry-cdk-stack.ts` (316行)
+  - 全AWSリソース定義
+  - WAF IP Set + WebACL実装
+  - Lambda@Edge統合
+  - OAC設定
+
+- `bin/cloudfront-sorry-cdk.ts` (40行)
+  - CDKアプリエントリーポイント
+  - コンテキストパラメータ処理
+
+- `lambda/maintenance-router.js` (195行)
+  - Origin Requestハンドラー
+  - 3層判定ロジック（フラグ・IP・時間）
+  - 動的オリジン切り替え
+  - JST時間帯チェック
+
+#### Static Sorry Page
+- `static-sorry-page/index.html` (256行)
+  - レスポンシブデザイン（モバイル対応）
+  - CSS Animation（fadeIn, pulse, spin）
+  - 動的メンテナンス時刻表示
+  - UTF-8エンコーディング
+
+- `static-sorry-page/README.md` (257行)
+  - カスタマイズガイド（5つの方法）
+  - デプロイ手順（3パターン）
+  - 動的時刻表示実装例
+  - トラブルシューティング
+
+#### Documentation
+- `README.md` (634行)
+  - プロジェクト概要
+  - 前提条件・環境構築
+  - デプロイ手順（6ステップ）
+  - 設定管理（CLI例）
+  - 運用ガイド
+
+- `architecture-design.md` (581行)
+  - 詳細アーキテクチャ設計
+  - コンポーネント仕様
+  - データフロー図
+  - セキュリティ設計
+
+- `docs/DEPLOYMENT_GUIDE.md` (683行)
+  - 段階的デプロイ手順
+  - 検証コマンド
+  - トラブルシューティング
+
+- `docs/OPERATION_GUIDE.md` (569行)
+  - 日常運用手順
+  - 4つのテストシナリオ
+  - 設定変更手順
+  - モニタリング設定
+
+- `docs/SECURITY.md` (489行)
+  - セキュリティベストプラクティス
+  - WAF運用ガイド
+  - チェックリスト
+
+- `SUMMARY.md` (934行)
+  - プロジェクト全体サマリー
+  - ファイル一覧と説明
+  - 技術成果
+  - コスト分析
+
+### 💰 コスト試算
+**月間推定コスト**: $20.85 (約3,000円)
+- CloudFront: $11.50 (1M requests)
+- Lambda@Edge: $5.20 (1M invocations)
+- S3: $3.00 (10GB storage)
+- WAF: $1.00 (1 WebACL)
+- Parameter Store: $0.15
+- CloudWatch Logs: 無料枠内
+
+### 🔐 セキュリティ実装
+1. **S3アクセス制御**: Origin Access Control (OAC)
+2. **通信暗号化**: HTTPS強制（TLS 1.2+）
+3. **データ暗号化**: S3 Server-Side Encryption (AES-256)
+4. **IP制限**: WAF IP Set（最大10,000 IP対応）
+5. **IAM最小権限**: Lambda実行ロールの適切なスコープ設定
+
+### 🚀 デプロイ手順
+```bash
+# 1. 依存関係インストール
+npm install
+
+# 2. CDK Bootstrap（初回のみ）
+cdk bootstrap
+
+# 3. デプロイ
+cdk deploy --context allowedIps='["203.0.113.0/24"]' \
+           --context maintenanceMode=false
+
+# 4. Sorryページアップロード
+aws s3 cp static-sorry-page/index.html \
+  s3://cloudfront-sorry-page-{account-id}/index.html \
+  --content-type "text/html; charset=utf-8"
+
+# 5. メンテナンスモード有効化
+aws ssm put-parameter \
+  --name "/cloudfront-sorry/maintenance-mode-enabled" \
+  --value "true" \
+  --overwrite
+
+# 6. CloudFrontキャッシュ無効化
+aws cloudfront create-invalidation \
+  --distribution-id E1234EXAMPLE \
+  --paths "/*"
+```
+
+### 🧪 テスト実施（4シナリオ）
+1. ✅ **通常アクセス**: メンテナンスモードOFF → Main Siteが表示
+2. ✅ **メンテナンス中**: 一般ユーザー → Sorry Pageが表示
+3. ✅ **IPバイパス**: 許可IP → Main Siteにアクセス可能
+4. ✅ **時間外アクセス**: メンテナンス時間外 → Main Siteが表示
+
+### 📊 技術成果
+1. **3層メンテナンス制御**: フラグ・IP・時間の柔軟な組み合わせ
+2. **Lambda@Edge活用**: Origin Requestでの動的オリジン切り替え
+3. **WAFカスタムヘッダー**: `X-Maintenance-Bypass` ヘッダー注入
+4. **レスポンシブSorryページ**: モバイルファースト設計
+5. **運用自動化**: SSM Parameter Storeによる設定管理
+
+### 🔧 使用したMCPサーバ
+1. **aws-documentation-mcp-server**:
+   - CloudFront + Lambda@Edge統合パターン調査
+   - WAF IP Set設定ベストプラクティス確認
+   - Origin Access Control (OAC) ドキュメント参照
+
+2. **cdk-mcp-server**:
+   - CDK構文ガイダンス取得
+   - Lambda@Edge実装パターン確認
+
+### 💡 重要な技術的学び
+1. **Lambda@Edge制約**:
+   - Node.js 20.x使用
+   - 5秒タイムアウト制限
+   - us-east-1リージョンでのデプロイ必須
+   - IAM Composite Principal必須
+
+2. **WAFカスタムヘッダー機能**:
+   - IP Set Matchルールでヘッダー注入可能
+   - Lambda@Edgeで独自ヘッダー検証可能
+
+3. **CloudFront複数オリジン**:
+   - Lambda@EdgeのOrigin Requestで動的切り替え
+   - 各オリジンにOAC個別設定必要
+
+4. **時間帯判定のベストプラクティス**:
+   - ISO 8601形式（`2025-12-25T00:00:00+09:00`）
+   - Lambda環境変数での設定管理
+   - UTC変換の正確な実装
+
+### 🎓 AWS公式ドキュメント活用
+- **CloudFront Lambda@Edge**: 4つのイベントタイプと用途
+- **WAF Custom Request Handling**: ヘッダー注入機能
+- **S3 OAC**: OAIの後継として推奨される新方式
+- **CDK Best Practices**: スタック設計とリソース命名規則
+
+### 📚 参照ドキュメント
+- AWS CloudFront Developer Guide - Lambda@Edge
+- AWS WAF Developer Guide - IP Set Reference Statement
+- AWS CDK API Reference v2
+- AWS S3 Origin Access Control Documentation
+
+### ⏭️ Next Steps（拡張案）
+- [ ] カスタムドメイン設定（Route53 + ACM証明書）
+- [ ] CloudWatch Alarms設定（WAFブロック数監視）
+- [ ] 複数環境対応（dev/stg/prod）
+- [ ] Sorryページ多言語対応
+- [ ] DynamoDB連携（動的メンテナンス時刻管理）
+
+### 🏆 プロジェクト完了確認
+- ✅ アーキテクチャ設計完了
+- ✅ CDKスタック実装完了
+- ✅ Lambda@Edge関数実装完了
+- ✅ Sorryページデザイン完了
+- ✅ 包括的ドキュメント作成完了
+- ✅ デプロイ手順検証完了
+- ✅ SUMMARY.md作成完了
+
+**総作業時間**: 約3時間
+**成果物総行数**: 4,938行
+**技術スタック**: AWS CDK (TypeScript), Lambda (Node.js 20.x), CloudFront, WAF, S3, Parameter Store
+
+---
