@@ -1,6 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Route53 Hosted Zone for hogehoge.com with DNS records'
 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "DNS設定"
+        Parameters:
+          - DomainName
+          - DefaultTTL
+    ParameterLabels:
+      DomainName:
+        default: "ドメイン名"
+      DefaultTTL:
+        default: "デフォルトTTL"
+
 Parameters:
   DomainName:
     Type: String
