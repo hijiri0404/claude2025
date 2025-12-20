@@ -2,7 +2,7 @@
 
 ## 📅 作業情報
 - **作業日**: 2025-12-20 (JST)
-- **主要タスク**: Route53のCloudFormationテンプレート作成（IaC化）+ hijiri0404.link 専用テンプレート作成
+- **主要タスク**: Route53のCloudFormationテンプレート作成（IaC化）+ hijiri0404.link 専用テンプレート作成 + hogehoge.com ホストゾーン作成・デプロイ
 
 ## 📁 生成ファイル一覧
 
@@ -116,6 +116,25 @@
 - トラブルシューティング
 - デプロイチェックリスト
 
+### hogehoge.com 専用テンプレート
+
+#### 8. `hogehoge-com-hostzone-only.yaml` ✅ **デプロイ済み**
+**hogehoge.com ドメイン用ホストゾーンのみテンプレート**
+- ホストゾーンのみ作成（DNSレコードなし）
+- CloudFormationでデプロイ済み（ap-northeast-1）
+- 最小限のシンプル構成
+
+**作成されたリソース**:
+- HostedZone: hogehoge.com
+- Hosted Zone ID: Z02408001PWHM1YO89JM0
+- CloudFormationスタック: hogehoge-com-route53
+
+**ネームサーバー（ドメインレジストラで設定が必要）**:
+- ns-1085.awsdns-07.org
+- ns-261.awsdns-32.com
+- ns-733.awsdns-27.net
+- ns-2034.awsdns-62.co.uk
+
 ## 🎯 完了したタスク
 - [x] 基本的なRoute53 CloudFormationテンプレート作成
 - [x] ALB/CloudFront統合テンプレート作成
@@ -124,6 +143,7 @@
 - [x] hijiri0404.link 専用基本テンプレート作成
 - [x] hijiri0404.link 専用本番環境テンプレート作成
 - [x] hijiri0404.link 専用デプロイメントガイド作成
+- [x] hogehoge.com ホストゾーン作成・デプロイ（CloudFormation）
 - [x] SUMMARY.md作成・更新
 
 ## 💡 テンプレートの特徴
@@ -232,6 +252,7 @@ work/20251220/
 ├── hijiri0404-link-basic.yaml               # hijiri0404.link：基本テンプレート
 ├── hijiri0404-link-production.yaml          # hijiri0404.link：本番環境テンプレート ⭐
 ├── hijiri0404-link-deployment-guide.md      # hijiri0404.link：デプロイメントガイド
+├── hogehoge-com-hostzone-only.yaml          # hogehoge.com：ホストゾーンのみ ✅ デプロイ済み
 └── SUMMARY.md                               # 本ファイル（作業概要）
 ```
 
