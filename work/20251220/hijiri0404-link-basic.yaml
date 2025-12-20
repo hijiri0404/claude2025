@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Route53 Configuration for hijiri0404.link (Basic)'
+
+Parameters:
+  WebServerIPAddress:
+    Type: String
+    Description: 'IP address for web server (leave empty if using ALB)'
+    Default: ''
+
+  UseStaticIP:
+    Type: String
+    Description: 'Use static IP address instead of ALB?'
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  HasStaticIP: !Equals [!Ref UseStaticIP, 'true']
+
+Resources:
+  # ホストゾーン
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: 'hijiri0404.link'
+      HostedZoneConfig:
+        Comment: 'Hosted zone for hijiri0404.link'
+      HostedZoneTags:
+        - Key: Name
+          Value: 'hijiri0404.link'
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Owner
+          Value: hijiri0404
+
+  # ルートドメインのAレコード（静的IP使用時のみ）
+  RootARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # WWWサブドメインのAレコード（静的IP使用時のみ）
+  WWWARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'www.hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # ブログサブドメイン（静的IP使用時のみ）
+  BlogARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'blog.hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # APIサブドメイン（静的IP使用時のみ）
+  APIARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'api.hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # 開発環境サブドメイン（静的IP使用時のみ）
+  DevARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'dev.hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # ステージング環境サブドメイン（静的IP使用時のみ）
+  StagingARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasStaticIP
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'staging.hijiri0404.link'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+Outputs:
+  HostedZoneId:
+    Description: 'Hosted Zone ID'
+    Value: !Ref HostedZone
+    Export:
+      Name: 'hijiri0404-link-HostedZoneId'
+
+  HostedZoneName:
+    Description: 'Hosted Zone Name'
+    Value: 'hijiri0404.link'
+    Export:
+      Name: 'hijiri0404-link-HostedZoneName'
+
+  NameServers:
+    Description: 'Name servers for the hosted zone - Update these at your domain registrar'
+    Value: !Join [', ', !GetAtt HostedZone.NameServers]
+
+  NameServer1:
+    Description: 'Name Server 1'
+    Value: !Select [0, !GetAtt HostedZone.NameServers]
+
+  NameServer2:
+    Description: 'Name Server 2'
+    Value: !Select [1, !GetAtt HostedZone.NameServers]
+
+  NameServer3:
+    Description: 'Name Server 3'
+    Value: !Select [2, !GetAtt HostedZone.NameServers]
+
+  NameServer4:
+    Description: 'Name Server 4'
+    Value: !Select [3, !GetAtt HostedZone.NameServers]

@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Route53 Hosted Zone and Record Sets'
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Domain name for the hosted zone (e.g., example.com)'
+    Default: 'example.com'
+
+  WebServerIPAddress:
+    Type: String
+    Description: 'IP address for web server A record'
+    Default: '192.0.2.1'
+    AllowedPattern: '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+  MailServerPriority:
+    Type: Number
+    Description: 'Priority for MX record'
+    Default: 10
+    MinValue: 0
+    MaxValue: 65535
+
+Resources:
+  # ホストゾーンの作成
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub 'Hosted zone for ${DomainName}'
+      HostedZoneTags:
+        - Key: Name
+          Value: !Ref DomainName
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Aレコード - Webサーバー（example.com）
+  RootARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # Aレコード - WWWサブドメイン
+  WWWARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'www.${DomainName}'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # CNAMEレコード - FTPエイリアス
+  FTPCNAMERecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'ftp.${DomainName}'
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords:
+        - !Ref DomainName
+
+  # MXレコード - メールサーバー
+  MailMXRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: MX
+      TTL: '3600'
+      ResourceRecords:
+        - !Sub '${MailServerPriority} mail.${DomainName}'
+
+  # Aレコード - メールサーバー
+  MailARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'mail.${DomainName}'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - !Ref WebServerIPAddress
+
+  # TXTレコード - SPFレコード
+  SPFTXTRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: TXT
+      TTL: '300'
+      ResourceRecords:
+        - '"v=spf1 ip4:192.0.2.0/24 -all"'
+
+  # TXTレコード - ドメイン検証用
+  VerificationTXTRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub '_verification.${DomainName}'
+      Type: TXT
+      TTL: '300'
+      ResourceRecords:
+        - '"verification-token-12345"'
+
+  # AAAAAレコード - IPv6対応（オプション）
+  RootAAAARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: AAAA
+      TTL: '300'
+      ResourceRecords:
+        - '2001:0db8:85a3:0000:0000:8a2e:0370:7334'
+
+Outputs:
+  HostedZoneId:
+    Description: 'Hosted Zone ID'
+    Value: !Ref HostedZone
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneId'
+
+  HostedZoneName:
+    Description: 'Hosted Zone Name'
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneName'
+
+  NameServers:
+    Description: 'Name servers for the hosted zone'
+    Value: !Join [', ', !GetAtt HostedZone.NameServers]
+
+  RootDomainARecord:
+    Description: 'Root domain A record'
+    Value: !Ref WebServerIPAddress

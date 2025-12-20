@@ -1,0 +1,295 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Route53 Configuration for hijiri0404.link (Production with ALB/CloudFront)'
+
+Parameters:
+  # ALB設定
+  ALBDNSName:
+    Type: String
+    Description: 'ALB DNS name (e.g., my-alb-123456.ap-northeast-1.elb.amazonaws.com)'
+    Default: ''
+
+  ALBHostedZoneId:
+    Type: String
+    Description: 'ALB Hosted Zone ID for Tokyo region'
+    Default: 'Z14GRHDCWA56QT'  # ap-northeast-1
+
+  # CloudFront設定
+  CloudFrontDNSName:
+    Type: String
+    Description: 'CloudFront distribution domain name (e.g., d123456.cloudfront.net)'
+    Default: ''
+
+  CloudFrontHostedZoneId:
+    Type: String
+    Description: 'CloudFront Hosted Zone ID (always Z2FDTNDATAQYW2)'
+    Default: 'Z2FDTNDATAQYW2'
+
+  # 機能フラグ
+  CreateALBRecords:
+    Type: String
+    Description: 'Create ALB alias records?'
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  CreateCloudFrontRecords:
+    Type: String
+    Description: 'Create CloudFront alias records?'
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  EnableHealthCheck:
+    Type: String
+    Description: 'Enable health check for main domain?'
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  HasALB: !And
+    - !Equals [!Ref CreateALBRecords, 'true']
+    - !Not [!Equals [!Ref ALBDNSName, '']]
+
+  HasCloudFront: !And
+    - !Equals [!Ref CreateCloudFrontRecords, 'true']
+    - !Not [!Equals [!Ref CloudFrontDNSName, '']]
+
+  NeedsHealthCheck: !And
+    - !Equals [!Ref EnableHealthCheck, 'true']
+    - !Condition HasALB
+
+Resources:
+  # ホストゾーン
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: 'hijiri0404.link'
+      HostedZoneConfig:
+        Comment: 'Production hosted zone for hijiri0404.link'
+      HostedZoneTags:
+        - Key: Name
+          Value: 'hijiri0404.link'
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Owner
+          Value: hijiri0404
+
+  # ===== ALB統合レコード =====
+
+  # ルートドメイン - ALB Alias
+  RootALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # WWWサブドメイン - ALB Alias
+  WWWALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'www.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # ブログサブドメイン - ALB Alias
+  BlogALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'blog.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # APIサブドメイン - ALB Alias
+  APIALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'api.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # 開発環境サブドメイン - ALB Alias
+  DevALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'dev.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # ステージング環境サブドメイン - ALB Alias
+  StagingALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'staging.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # 管理画面サブドメイン - ALB Alias
+  AdminALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'admin.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # ===== CloudFront統合レコード =====
+
+  # CDNサブドメイン - CloudFront Alias (A)
+  CDNCloudFrontAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'cdn.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # CDNサブドメイン - CloudFront Alias (AAAA for IPv6)
+  CDNCloudFrontAAAAAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'cdn.hijiri0404.link'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # 静的コンテンツサブドメイン - CloudFront Alias (A)
+  StaticCloudFrontAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'static.hijiri0404.link'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # 静的コンテンツサブドメイン - CloudFront Alias (AAAA for IPv6)
+  StaticCloudFrontAAAAAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'static.hijiri0404.link'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # ===== ヘルスチェック =====
+
+  # メインドメインのヘルスチェック
+  MainDomainHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Condition: NeedsHealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        ResourcePath: '/'
+        FullyQualifiedDomainName: 'hijiri0404.link'
+        Port: 443
+        RequestInterval: 30
+        FailureThreshold: 3
+        MeasureLatency: true
+      HealthCheckTags:
+        - Key: Name
+          Value: 'hijiri0404.link-main-health-check'
+        - Key: Environment
+          Value: Production
+
+Outputs:
+  HostedZoneId:
+    Description: 'Hosted Zone ID'
+    Value: !Ref HostedZone
+    Export:
+      Name: 'hijiri0404-link-HostedZoneId'
+
+  HostedZoneName:
+    Description: 'Hosted Zone Name'
+    Value: 'hijiri0404.link'
+    Export:
+      Name: 'hijiri0404-link-HostedZoneName'
+
+  NameServers:
+    Description: 'Name servers - Update these at your domain registrar'
+    Value: !Join [', ', !GetAtt HostedZone.NameServers]
+
+  NameServer1:
+    Description: 'Name Server 1'
+    Value: !Select [0, !GetAtt HostedZone.NameServers]
+
+  NameServer2:
+    Description: 'Name Server 2'
+    Value: !Select [1, !GetAtt HostedZone.NameServers]
+
+  NameServer3:
+    Description: 'Name Server 3'
+    Value: !Select [2, !GetAtt HostedZone.NameServers]
+
+  NameServer4:
+    Description: 'Name Server 4'
+    Value: !Select [3, !GetAtt HostedZone.NameServers]
+
+  HealthCheckId:
+    Description: 'Health Check ID'
+    Value: !If [NeedsHealthCheck, !Ref MainDomainHealthCheck, 'N/A']
+    Condition: NeedsHealthCheck
+
+  RootDomainURL:
+    Description: 'Root domain URL'
+    Value: 'https://hijiri0404.link'
+
+  WWWDomainURL:
+    Description: 'WWW domain URL'
+    Value: 'https://www.hijiri0404.link'

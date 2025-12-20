@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Route53 with ALB Integration'
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Domain name for the hosted zone (e.g., example.com)'
+    Default: 'example.com'
+
+  ALBDNSName:
+    Type: String
+    Description: 'ALB DNS name (e.g., my-alb-123456.us-east-1.elb.amazonaws.com)'
+    Default: ''
+
+  ALBHostedZoneId:
+    Type: String
+    Description: 'ALB Hosted Zone ID (varies by region)'
+    Default: 'Z35SXDOTRQ7X7K'  # us-east-1のALB Hosted Zone ID
+
+  CloudFrontDNSName:
+    Type: String
+    Description: 'CloudFront distribution domain name (e.g., d123456.cloudfront.net)'
+    Default: ''
+
+  CloudFrontHostedZoneId:
+    Type: String
+    Description: 'CloudFront Hosted Zone ID (always Z2FDTNDATAQYW2)'
+    Default: 'Z2FDTNDATAQYW2'
+
+  CreateCloudFrontRecord:
+    Type: String
+    Description: 'Create CloudFront alias record?'
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  HasALB: !Not [!Equals [!Ref ALBDNSName, '']]
+  HasCloudFront: !And
+    - !Equals [!Ref CreateCloudFrontRecord, 'true']
+    - !Not [!Equals [!Ref CloudFrontDNSName, '']]
+
+Resources:
+  # ホストゾーンの作成
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub 'Hosted zone for ${DomainName} with ALB/CloudFront integration'
+      HostedZoneTags:
+        - Key: Name
+          Value: !Ref DomainName
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Aliasレコード - ALB（example.com）
+  RootALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # Aliasレコード - ALB（www.example.com）
+  WWWALBAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'www.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # Aliasレコード - CloudFront（cdn.example.com）
+  CDNCloudFrontAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'cdn.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # Aliasレコード - CloudFront AAAA（IPv6対応）
+  CDNCloudFrontAAAAAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'cdn.${DomainName}'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !Ref CloudFrontDNSName
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        EvaluateTargetHealth: false
+
+  # Aliasレコード - API Gateway用（api.example.com）
+  APISubdomainARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'api.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # ヘルスチェック - Webサーバー監視
+  WebServerHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Condition: HasALB
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        ResourcePath: '/health'
+        FullyQualifiedDomainName: !Ref DomainName
+        Port: 443
+        RequestInterval: 30
+        FailureThreshold: 3
+      HealthCheckTags:
+        - Key: Name
+          Value: !Sub '${DomainName}-health-check'
+
+  # フェイルオーバー用プライマリレコード（例）
+  FailoverPrimaryRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'failover.${DomainName}'
+      Type: A
+      SetIdentifier: 'Primary'
+      Failover: PRIMARY
+      HealthCheckId: !Ref WebServerHealthCheck
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # 地理的ルーティング - 東京リージョン（例）
+  GeoLocationTokyoRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'geo.${DomainName}'
+      Type: A
+      SetIdentifier: 'Tokyo'
+      GeoLocation:
+        ContinentCode: AS
+        CountryCode: JP
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+  # 重み付けルーティング - 70%トラフィック（例）
+  WeightedRecord70:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALB
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'weighted.${DomainName}'
+      Type: A
+      SetIdentifier: 'Weight-70'
+      Weight: 70
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+Outputs:
+  HostedZoneId:
+    Description: 'Hosted Zone ID'
+    Value: !Ref HostedZone
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneId'
+
+  HostedZoneName:
+    Description: 'Hosted Zone Name'
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneName'
+
+  NameServers:
+    Description: 'Name servers for the hosted zone'
+    Value: !Join [', ', !GetAtt HostedZone.NameServers]
+
+  HealthCheckId:
+    Description: 'Health Check ID'
+    Value: !If [HasALB, !Ref WebServerHealthCheck, 'N/A']
+    Condition: HasALB
