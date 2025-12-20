@@ -1,17 +1,30 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Route53 Hosted Zone for hogehoge.com with DNS records'
 
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Domain name for the hosted zone'
+    Default: 'hogehoge.com'
+
+  DefaultTTL:
+    Type: Number
+    Description: 'Default TTL for DNS records (in seconds)'
+    Default: 300
+    MinValue: 60
+    MaxValue: 86400
+
 Resources:
   # ホストゾーン
   HostedZone:
     Type: AWS::Route53::HostedZone
     Properties:
-      Name: 'hogehoge.com'
+      Name: !Ref DomainName
       HostedZoneConfig:
-        Comment: 'Public hosted zone for hogehoge.com'
+        Comment: !Sub 'Public hosted zone for ${DomainName}'
       HostedZoneTags:
         - Key: Name
-          Value: 'hogehoge.com'
+          Value: !Ref DomainName
         - Key: ManagedBy
           Value: CloudFormation
 
@@ -20,9 +33,9 @@ Resources:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref HostedZone
-      Name: 'wwww1.hogehoge.com'
+      Name: !Sub 'wwww1.${DomainName}'
       Type: A
-      TTL: '300'
+      TTL: !Ref DefaultTTL
       ResourceRecords:
         - '192.168.1.1'
 
@@ -35,7 +48,7 @@ Outputs:
 
   HostedZoneName:
     Description: 'Hosted Zone Name'
-    Value: 'hogehoge.com'
+    Value: !Ref DomainName
     Export:
       Name: 'hogehoge-com-HostedZoneName'
 
