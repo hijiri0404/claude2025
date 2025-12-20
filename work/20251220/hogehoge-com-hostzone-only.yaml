@@ -43,6 +43,17 @@ Resources:
       ResourceRecords:
         - '192.168.1.1'
 
+  # wwww2サブドメインのAレコード
+  WWWW2ARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'wwww2.${DomainName}'
+      Type: A
+      TTL: !Ref DefaultTTL
+      ResourceRecords:
+        - '192.168.1.2'
+
 Outputs:
   HostedZoneId:
     Description: 'Hosted Zone ID'
