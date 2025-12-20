@@ -6,13 +6,17 @@ Parameters:
     Type: String
     Description: 'Domain name for the hosted zone'
     Default: 'hogehoge.com'
+    AllowedValues:
+      - 'hogehoge.com'
 
   DefaultTTL:
     Type: Number
-    Description: 'Default TTL for DNS records (in seconds)'
+    Description: 'Default TTL for DNS records (5min/1hour/24hours)'
     Default: 300
-    MinValue: 60
-    MaxValue: 86400
+    AllowedValues:
+      - 300    # 5分
+      - 3600   # 1時間
+      - 86400  # 24時間
 
 Resources:
   # ホストゾーン
