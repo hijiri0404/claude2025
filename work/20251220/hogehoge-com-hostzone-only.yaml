@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Route53 Hosted Zone for hogehoge.com (No DNS records)'
+Description: 'Route53 Hosted Zone for hogehoge.com with DNS records'
 
 Resources:
-  # ホストゾーン（レコードなし）
+  # ホストゾーン
   HostedZone:
     Type: AWS::Route53::HostedZone
     Properties:
@@ -14,6 +14,17 @@ Resources:
           Value: 'hogehoge.com'
         - Key: ManagedBy
           Value: CloudFormation
+
+  # wwww1サブドメインのAレコード
+  WWWW1ARecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: 'wwww1.hogehoge.com'
+      Type: A
+      TTL: '300'
+      ResourceRecords:
+        - '192.168.1.1'
 
 Outputs:
   HostedZoneId:
