@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Route53 Hosted Zone for hogehoge.com (No DNS records)'
+
+Resources:
+  # ホストゾーン（レコードなし）
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: 'hogehoge.com'
+      HostedZoneConfig:
+        Comment: 'Public hosted zone for hogehoge.com'
+      HostedZoneTags:
+        - Key: Name
+          Value: 'hogehoge.com'
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  HostedZoneId:
+    Description: 'Hosted Zone ID'
+    Value: !Ref HostedZone
+    Export:
+      Name: 'hogehoge-com-HostedZoneId'
+
+  HostedZoneName:
+    Description: 'Hosted Zone Name'
+    Value: 'hogehoge.com'
+    Export:
+      Name: 'hogehoge-com-HostedZoneName'
+
+  NameServers:
+    Description: 'Name servers - Update these at your domain registrar'
+    Value: !Join [', ', !GetAtt HostedZone.NameServers]
+
+  NameServer1:
+    Description: 'Name Server 1'
+    Value: !Select [0, !GetAtt HostedZone.NameServers]
+
+  NameServer2:
+    Description: 'Name Server 2'
+    Value: !Select [1, !GetAtt HostedZone.NameServers]
+
+  NameServer3:
+    Description: 'Name Server 3'
+    Value: !Select [2, !GetAtt HostedZone.NameServers]
+
+  NameServer4:
+    Description: 'Name Server 4'
+    Value: !Select [3, !GetAtt HostedZone.NameServers]
