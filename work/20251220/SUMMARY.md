@@ -119,15 +119,23 @@
 ### hogehoge.com 専用テンプレート
 
 #### 8. `hogehoge-com-hostzone-only.yaml` ✅ **デプロイ済み**
-**hogehoge.com ドメイン用ホストゾーンのみテンプレート**
-- ホストゾーンのみ作成（DNSレコードなし）
+**hogehoge.com ドメイン用ホストゾーン + DNSレコードテンプレート**
+- ホストゾーン + 3つのAレコード作成
 - CloudFormationでデプロイ済み（ap-northeast-1）
-- 最小限のシンプル構成
+- パラメータ制約機能（AllowedValues、Metadata）搭載
+
+**パラメータ機能**:
+- DomainName: 'hogehoge.com' のみ許可（AllowedValues制約）
+- DefaultTTL: 300秒/3600秒/86400秒の3択（5分/1時間/24時間）
+- Metadataセクション: パラメータ表示順序固定、日本語ラベル対応
 
 **作成されたリソース**:
 - HostedZone: hogehoge.com
 - Hosted Zone ID: Z02408001PWHM1YO89JM0
 - CloudFormationスタック: hogehoge-com-route53
+- wwww1.hogehoge.com (192.168.1.1)
+- wwww2.hogehoge.com (192.168.1.2)
+- wwww3.hogehoge.com (192.168.1.3)
 
 **ネームサーバー（ドメインレジストラで設定が必要）**:
 - ns-1085.awsdns-07.org
@@ -144,6 +152,9 @@
 - [x] hijiri0404.link 専用本番環境テンプレート作成
 - [x] hijiri0404.link 専用デプロイメントガイド作成
 - [x] hogehoge.com ホストゾーン作成・デプロイ（CloudFormation）
+- [x] hogehoge.com テンプレートのパラメータ制約追加（AllowedValues、Metadata）
+- [x] hogehoge.com に wwww1/wwww2 Aレコード追加・デプロイ
+- [x] hogehoge.com に wwww3 Aレコード追加・デプロイ
 - [x] SUMMARY.md作成・更新
 
 ## 💡 テンプレートの特徴
