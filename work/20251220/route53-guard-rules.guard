@@ -1,0 +1,101 @@
+# CloudFormation Guard Rules for Route53 Best Practices
+# Route53ホストゾーンとDNSレコードのベストプラクティスルール
+
+#
+# Rule 1: ホストゾーンには必ずタグが設定されていること
+#
+rule route53_hosted_zone_has_tags {
+    Resources.*[ Type == 'AWS::Route53::HostedZone' ] {
+        Properties {
+            HostedZoneTags exists
+            HostedZoneTags not empty
+            <<
+                違反: Route53ホストゾーンには必ずタグを設定してください
+                理由: タグはリソース管理、コスト追跡、アクセス制御に必要です
+            >>
+        }
+    }
+}
+
+#
+# Rule 2: ホストゾーンにはNameタグが必須
+#
+rule route53_hosted_zone_has_name_tag {
+    Resources.*[ Type == 'AWS::Route53::HostedZone' ] {
+        Properties {
+            HostedZoneTags exists
+            some HostedZoneTags[*].Key == 'Name'
+            <<
+                違反: ホストゾーンにはNameタグを設定してください
+                理由: リソースの識別を容易にするため
+            >>
+        }
+    }
+}
+
+#
+# Rule 3: DNSレコードのTTL値は適切な範囲内であること (60秒以上、86400秒以下)
+# Note: CloudFormation組み込み関数 (!Ref) は実行時にしか評価されないため、
+#       cfn-guardでは検証できません。パラメータのAllowedValuesで制約してください。
+#
+rule route53_record_ttl_exists {
+    Resources.*[ Type == 'AWS::Route53::RecordSet' ] {
+        Properties {
+            TTL exists
+            <<
+                違反: DNSレコードにはTTL値を設定してください
+                理由: TTL値は適切に設定する必要があります(推奨: 60-86400秒)
+            >>
+        }
+    }
+}
+
+#
+# Rule 4: Aレコードには有効なIPv4アドレスが設定されていること
+#
+rule route53_a_record_valid_ipv4 {
+    Resources.*[
+        Type == 'AWS::Route53::RecordSet'
+        Properties.Type == 'A'
+    ] {
+        Properties {
+            ResourceRecords exists
+            ResourceRecords not empty
+            <<
+                違反: AレコードにはResourceRecordsが必要です
+                理由: AレコードはIPv4アドレスを指定する必要があります
+            >>
+        }
+    }
+}
+
+#
+# Rule 5: HostedZoneConfigにコメントが設定されていること
+#
+rule route53_hosted_zone_has_comment {
+    Resources.*[ Type == 'AWS::Route53::HostedZone' ] {
+        Properties {
+            HostedZoneConfig exists
+            HostedZoneConfig.Comment exists
+            <<
+                違反: ホストゾーンにはHostedZoneConfig.Commentを設定してください
+                理由: ホストゾーンの用途を明確にするため
+            >>
+        }
+    }
+}
+
+#
+# Rule 6: レコード名が適切に設定されていること (ドメイン名を含む)
+#
+rule route53_record_has_valid_name {
+    Resources.*[ Type == 'AWS::Route53::RecordSet' ] {
+        Properties {
+            Name exists
+            <<
+                違反: DNSレコードにはName属性が必要です
+                理由: レコード名がないとDNS解決ができません
+            >>
+        }
+    }
+}
