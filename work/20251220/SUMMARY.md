@@ -116,9 +116,30 @@
 - トラブルシューティング
 - デプロイチェックリスト
 
+### CloudFormation Guard 検証ルール
+
+#### 8. `route53-guard-rules.guard` ✅ **検証完了**
+**Route53ベストプラクティスに基づいたCloudFormation Guardルール**
+- CloudFormation Guard 3.1.2を使用したテンプレート検証
+- Route53のセキュリティ・ベストプラクティスを強制
+- 全6ルール実装、hogehoge-com-hostzone-only.yamlで全ルールPASS
+
+**実装ルール**:
+1. `route53_hosted_zone_has_tags` - ホストゾーンに必ずタグを設定
+2. `route53_hosted_zone_has_name_tag` - ホストゾーンにNameタグが必須
+3. `route53_record_ttl_exists` - DNSレコードにTTL値が設定されていること
+4. `route53_a_record_valid_ipv4` - AレコードにResourceRecordsが必要
+5. `route53_hosted_zone_has_comment` - HostedZoneConfigにコメントが設定
+6. `route53_record_has_valid_name` - レコード名が適切に設定されていること
+
+**検証コマンド**:
+```bash
+cfn-guard validate --data hogehoge-com-hostzone-only.yaml --rules route53-guard-rules.guard --show-summary all
+```
+
 ### hogehoge.com 専用テンプレート
 
-#### 8. `hogehoge-com-hostzone-only.yaml` ✅ **デプロイ済み**
+#### 9. `hogehoge-com-hostzone-only.yaml` ✅ **デプロイ済み + CloudFormation Guard検証完了**
 **hogehoge.com ドメイン用ホストゾーン + DNSレコードテンプレート**
 - ホストゾーン + 3つのAレコード作成
 - CloudFormationでデプロイ済み（ap-northeast-1）
@@ -155,6 +176,9 @@
 - [x] hogehoge.com テンプレートのパラメータ制約追加（AllowedValues、Metadata）
 - [x] hogehoge.com に wwww1/wwww2 Aレコード追加・デプロイ
 - [x] hogehoge.com に wwww3 Aレコード追加・デプロイ
+- [x] CloudFormation Guard 3.1.2 インストール
+- [x] Route53用ガードルール作成（6ルール）
+- [x] hogehoge-com-hostzone-only.yaml の検証実行・全ルールPASS
 - [x] SUMMARY.md作成・更新
 
 ## 💡 テンプレートの特徴
