@@ -1,0 +1,18 @@
+{
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "sub.hijiri0404.link",
+        "Type": "NS",
+        "TTL": 300,
+        "ResourceRecords": [
+          {"Value": "ns-1864.awsdns-41.co.uk"},
+          {"Value": "ns-1351.awsdns-40.org"},
+          {"Value": "ns-50.awsdns-06.com"},
+          {"Value": "ns-1016.awsdns-63.net"}
+        ]
+      }
+    }
+  ]
+}
