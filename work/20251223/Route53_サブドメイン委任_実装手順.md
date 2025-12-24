@@ -125,6 +125,71 @@ aws route53 change-resource-record-sets \
 
 ---
 
+### 5️⃣ Zone Apex（sub.hijiri0404.link自体）のAレコード追加
+
+**重要な質問**: `sub.hijiri0404.link` をWebブラウザでHTTP接続したい場合、Aレコードは委任元・委任先のどちらに設定？
+
+**回答**: **委任先（Z04428142DRESCQ1V9IJ2）に設定**
+
+#### DNS委任の仕組み
+
+```
+ブラウザ → リゾルバ → ルートサーバー
+  → .link TLD
+  → hijiri0404.link のネームサーバー
+  → 「sub.hijiri0404.linkのNSレコード発見」
+  → 委任先ネームサーバー（ns-1864.awsdns-41.co.uk等）に転送
+  → 委任先ホストゾーンのAレコードを返す
+```
+
+#### なぜ委任先なのか？
+
+1. **NSレコードによる権威の委譲**
+   - 親ゾーンにNSレコードを追加した時点で、`sub.hijiri0404.link`およびその配下すべての権威は委任先に移譲
+
+2. **親ゾーンのAレコードは参照されない**
+   - NSレコードが存在する場合、そのサブドメインに関するクエリは必ず委任先に転送
+   - 親ゾーンにAレコードを追加しても無効
+
+3. **委任先がすべてを管理**
+   - Zone Apex（`sub.hijiri0404.link`自体）
+   - サブドメイン（`*.sub.hijiri0404.link`）
+   - すべてのレコードタイプ（A, AAAA, TXT, MX等）
+
+**JSONファイル作成** (`sub-apex-a-record.json`):
+
+```json
+{
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "sub.hijiri0404.link",
+        "Type": "A",
+        "TTL": 300,
+        "ResourceRecords": [
+          {"Value": "192.0.2.100"}
+        ]
+      }
+    }
+  ]
+}
+```
+
+**Zone Apex Aレコード追加実行:**
+
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z04428142DRESCQ1V9IJ2 \
+  --change-batch file:///tmp/aws-api-mcp/workdir/sub-apex-a-record.json
+```
+
+**結果:**
+- ChangeID: `/change/C03604512Z43ISFQ9MEDA`
+- Status: `PENDING`
+
+---
+
 ## ✅ 動作確認
 
 ### NSレコード確認
@@ -172,6 +237,33 @@ dig @ns-1864.awsdns-41.co.uk test.sub.hijiri0404.link A +short
 
 ---
 
+### Zone Apex（sub.hijiri0404.link）のAレコード確認
+
+```bash
+dig sub.hijiri0404.link A +short
+```
+
+**結果:**
+```
+192.0.2.100
+```
+
+✅ **委任されたゾーンのApex（頂点）も正しく解決される**
+
+#### 委任先ネームサーバーへの直接クエリ
+```bash
+dig @ns-1864.awsdns-41.co.uk sub.hijiri0404.link A +short
+```
+
+**結果:**
+```
+192.0.2.100
+```
+
+✅ **委任先でZone Apexが管理されていることを確認**
+
+---
+
 ## 🔑 重要ポイント
 
 ### ✅ 成功要因
@@ -186,6 +278,11 @@ dig @ns-1864.awsdns-41.co.uk test.sub.hijiri0404.link A +short
 3. **SOAレコードの扱い**
    - 親ドメイン側には **SOAレコードを追加しない**
    - 委任先が権威サーバーとなるため
+
+4. **Zone Apexのレコード配置**
+   - `sub.hijiri0404.link` 自体のAレコード等は **委任先に配置**
+   - NSレコードによる委任後は、すべてのレコードが委任先で管理される
+   - 親ゾーンに追加したAレコードは参照されない（NSが優先）
 
 ### ⚠️ 注意事項
 
@@ -223,7 +320,10 @@ sub.hijiri0404.link (Z04428142DRESCQ1V9IJ2)
 ├── NS: ns-1351.awsdns-40.org
 ├── NS: ns-50.awsdns-06.com
 ├── NS: ns-1016.awsdns-63.net
-└── test.sub.hijiri0404.link A 192.0.2.1
+├── sub.hijiri0404.link A 192.0.2.100 【Zone Apex】
+├── test.sub.hijiri0404.link A 192.0.2.1
+├── aaa.sub.hijiri0404.link A 192.0.2.10
+└── bbb.sub.hijiri0404.link A 192.0.2.20
 ```
 
 ---
@@ -302,13 +402,16 @@ aws route53 get-change --id /change/C07823463K0IRIP5G2VIO
 ✅ **成功した項目:**
 1. サブドメイン用ホストゾーン作成
 2. NSレコードによる委任設定
-3. テストAレコードの作成と解決確認
-4. DNSクエリの正常動作確認
+3. テストAレコードの作成と解決確認（test.sub, aaa.sub, bbb.sub）
+4. Zone Apex（sub.hijiri0404.link自体）のAレコード設定
+5. DNSクエリの正常動作確認
+6. 委任先でのレコード管理の実証
 
 🎯 **達成目標:**
 - `sub.hijiri0404.link` を独立したRoute53ホストゾーンで管理可能に
 - 親ドメインとサブドメインの分離管理を実現
 - DNS委任の仕組みを実証
+- **Zone Apexのレコードはすべて委任先で管理することを確認**
 
 ---
 

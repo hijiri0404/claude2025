@@ -37,6 +37,7 @@
 - `ns-delegation-change.json` - 親ドメインへのNSレコード追加用JSON
 - `test-a-record.json` - テスト用Aレコード作成用JSON
 - `additional-records.json` - 追加テスト用レコード（aaa, bbb）作成用JSON
+- `sub-apex-a-record.json` - Zone Apex（sub.hijiri0404.link自体）のAレコード作成用JSON
 
 ## 🎯 完了したタスク
 
@@ -56,6 +57,7 @@
 - [x] 親ドメインにNSレコード追加（委任設定）
 - [x] sub.hijiri0404.link にテスト用Aレコード作成（test.sub.hijiri0404.link）
 - [x] 追加サブドメインのテスト（aaa.sub.hijiri0404.link, bbb.sub.hijiri0404.link）
+- [x] Zone Apex（sub.hijiri0404.link自体）のAレコード追加
 - [x] DNS動作確認（dig コマンドでの検証）
 - [x] 実装手順書の作成
 
@@ -115,6 +117,7 @@
 hijiri0404.link (Z05608792OMRUEGE6GF3A)
 └── NSレコード: sub.hijiri0404.link
     └── 委任先: Z04428142DRESCQ1V9IJ2
+        ├── sub.hijiri0404.link → 192.0.2.100 ✅ 【Zone Apex】
         ├── test.sub.hijiri0404.link → 192.0.2.1 ✅
         ├── aaa.sub.hijiri0404.link → 192.0.2.10 ✅
         └── bbb.sub.hijiri0404.link → 192.0.2.20 ✅
@@ -129,8 +132,14 @@ hijiri0404.link (Z05608792OMRUEGE6GF3A)
    - sub.hijiri0404.link 配下は完全に別ホストゾーンで管理
    - 親ドメインへの影響なく自由にレコード追加可能
 
-3. **動作確認済み**
+3. **Zone Apexの管理**
+   - サブドメインのApex（sub.hijiri0404.link自体）も委任先で管理
+   - HTTPアクセスに必要なAレコードは委任先に配置
+   - NSレコードが存在する限り、親ゾーンのレコードは参照されない
+
+4. **動作確認済み**
    - NSレコードの正常な委任を確認
+   - Zone Apex（sub.hijiri0404.link）の名前解決が正常動作
    - 複数サブドメイン（test, aaa, bbb）の名前解決が正常動作
    - 委任先ネームサーバーへの直接クエリも正常
 
