@@ -1335,4 +1335,1331 @@ aws service-quotas request-service-quota-increase \
 
 ---
 
-**🎉 全60項目の包括的DNSマスターガイド完成！**
+## 61. DNS可観測性（Observability）の実装
+
+### 詳細なメトリクス・ログ・トレース
+- CloudWatch Metrics: クエリ数、レイテンシ、エラー率
+- Query Logging: S3/CloudWatch Logsへの全クエリ記録
+- Distributed Tracing: X-Rayで完全なDNS解決経路追跡
+- カスタムメトリクス: Prometheus/Grafana統合
+
+**CloudWatch Metricsダッシュボード**:
+```yaml
+主要メトリクス:
+- DNSQueries (クエリ総数)
+- HealthCheckStatus (ヘルスチェック状態)
+- ConnectionTime (接続時間)
+- ChildHealthCheckHealthyCount (子ヘルスチェック数)
+```
+
+**Advanced Query Log分析**:
+```bash
+# Athena でクエリログ分析
+SELECT query_name, query_type, COUNT(*) as query_count
+FROM route53_query_logs
+WHERE year='2025' AND month='01'
+GROUP BY query_name, query_type
+ORDER BY query_count DESC
+LIMIT 100;
+```
+
+**X-Ray統合**:
+- DNS解決→ALB→Lambda→RDSの完全トレース
+- ボトルネック特定と最適化
+
+---
+
+## 62. DNSセキュリティ強化（Zero Trust DNS）
+
+### 多層防御とゼロトラストモデル
+- DNS Firewall（Route53 Resolver DNS Firewall）
+- Threat Intelligence Feed統合
+- マルウェアドメインブロッキング
+- DNSベースのData Exfiltration防止
+
+**Route53 Resolver DNS Firewall設定**:
+```bash
+# ファイアウォールルールグループ作成
+aws route53resolver create-firewall-rule-group \
+  --name malware-blocking \
+  --creator-request-id $(uuidgen)
+
+# ドメインリスト作成（マルウェア既知ドメイン）
+aws route53resolver create-firewall-domain-list \
+  --name known-malware-domains \
+  --domains file://malware-domains.txt
+
+# ルール作成（ブロック）
+aws route53resolver create-firewall-rule \
+  --firewall-rule-group-id rslvr-frg-xxxxx \
+  --firewall-domain-list-id rslvr-fdl-xxxxx \
+  --priority 100 \
+  --action BLOCK \
+  --block-response NXDOMAIN
+```
+
+**Threat Intelligence統合**:
+- AWS Managed Threat List活用
+- サードパーティフィード（AlienVault, Cisco Talos）
+- 自動更新と即座適用
+
+**Data Exfiltration検知**:
+```python
+# 異常な長いサブドメイン検知（DNSトンネリング対策）
+import re
+
+def detect_dns_tunneling(query_log):
+    for query in query_log:
+        if len(query['query_name']) > 100:
+            alert(f"Possible DNS tunneling: {query['query_name']}")
+```
+
+---
+
+## 63. DNS負荷分散の高度な戦略
+
+### Global Server Load Balancing（GSLB）
+- マルチリージョン負荷分散
+- インテリジェントルーティング（Latency + Geolocation組み合わせ）
+- アクティブ-アクティブ構成
+- 災害時の自動フェイルオーバー
+
+**複合ルーティングポリシー**:
+```yaml
+# Geolocation + Latency-based の組み合わせ
+ルーティング階層:
+1. Geolocation（大陸レベル）
+   ├── アジア → ap-northeast-1（東京）
+   ├── ヨーロッパ → eu-west-1（アイルランド）
+   └── 北米 → us-east-1（バージニア）
+
+2. Latency-based（リージョン内）
+   ap-northeast-1
+   ├── Primary: Tokyo AZ-1
+   └── Secondary: Tokyo AZ-2（ヘルスチェック連動）
+```
+
+**動的重み付け調整**:
+```python
+import boto3
+
+client = boto3.client('route53')
+
+# 負荷状況に応じて重みを動的変更
+def adjust_weights(zone_id, primary_weight, secondary_weight):
+    # Primary: 70%, Secondary: 30% → 段階的カナリア
+    client.change_resource_record_sets(
+        HostedZoneId=zone_id,
+        ChangeBatch={
+            'Changes': [
+                {
+                    'Action': 'UPSERT',
+                    'ResourceRecordSet': {
+                        'Name': 'api.example.com',
+                        'Type': 'A',
+                        'SetIdentifier': 'primary',
+                        'Weight': primary_weight,
+                        'ResourceRecords': [{'Value': '192.0.2.1'}]
+                    }
+                }
+            ]
+        }
+    )
+```
+
+---
+
+## 64. DNSパフォーマンスチューニング
+
+### レスポンスタイム最適化
+- TTL最適化（用途別）
+- Anycastルーティング活用
+- Prefetch/Preconnect戦略
+- DNS Cachingレイヤー追加
+
+**TTL最適化ガイドライン**:
+```markdown
+| リソース種別 | 推奨TTL | 理由 |
+|-------------|---------|------|
+| CDN（CloudFront） | 3600秒（1時間） | 頻繁変更なし |
+| API Gateway | 60秒 | 柔軟な変更対応 |
+| ELB | 300秒（5分） | バランス型 |
+| 開発環境 | 30秒 | 即座反映 |
+| 静的コンテンツ | 86400秒（1日） | 最大キャッシュ |
+```
+
+**DNSプリフェッチ**:
+```html
+<!-- HTML でDNSプリフェッチ -->
+<link rel="dns-prefetch" href="//api.example.com">
+<link rel="dns-prefetch" href="//cdn.example.com">
+<link rel="preconnect" href="//api.example.com" crossorigin>
+```
+
+**Resolver最適化**:
+```bash
+# VPC DHCPオプションセット最適化
+aws ec2 create-dhcp-options \
+  --dhcp-configurations \
+    "Key=domain-name-servers,Values=AmazonProvidedDNS" \
+    "Key=domain-name,Values=ap-northeast-1.compute.internal"
+```
+
+---
+
+## 65. コンテナ環境でのDNS管理
+
+### Kubernetes/ECS でのDNS戦略
+- CoreDNS/kube-dns 設定最適化
+- Service Discovery統合
+- ExternalDNS自動化
+- ECS Service Connect活用
+
+**Kubernetes CoreDNS カスタマイズ**:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           fallthrough in-addr.arpa ip6.arpa
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+    # カスタムドメイン解決
+    example.com:53 {
+        errors
+        cache 300
+        forward . 192.0.2.1
+    }
+```
+
+**ExternalDNS with Route53**:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-dns
+spec:
+  template:
+    spec:
+      containers:
+      - name: external-dns
+        image: registry.k8s.io/external-dns/external-dns:v0.13.0
+        args:
+        - --source=service
+        - --source=ingress
+        - --domain-filter=example.com
+        - --provider=aws
+        - --policy=sync
+        - --aws-zone-type=public
+        - --registry=txt
+        - --txt-owner-id=my-cluster
+```
+
+**ECS Service Discovery**:
+```bash
+# Cloud Map名前空間作成
+aws servicediscovery create-private-dns-namespace \
+  --name local \
+  --vpc vpc-xxxxx
+
+# ECS サービス作成時にService Discovery統合
+aws ecs create-service \
+  --service-name my-app \
+  --service-registries "registryArn=arn:aws:servicediscovery:..."
+```
+
+---
+
+## 66. サーバーレスアーキテクチャでのDNS
+
+### Lambda/API Gateway/CloudFront統合
+- CloudFront Function での動的DNS処理
+- Lambda@Edge でのインテリジェントルーティング
+- API Gateway カスタムドメイン最適化
+- グローバルアクセラレーション
+
+**CloudFront Function（DNS リダイレクト）**:
+```javascript
+function handler(event) {
+    var request = event.request;
+    var host = request.headers.host.value;
+
+    // 旧ドメイン→新ドメイン自動リダイレクト
+    if (host === 'old.example.com') {
+        return {
+            statusCode: 301,
+            statusDescription: 'Moved Permanently',
+            headers: {
+                'location': { value: 'https://new.example.com' + request.uri }
+            }
+        };
+    }
+    return request;
+}
+```
+
+**Lambda@Edge Geo-routing**:
+```python
+import json
+
+def lambda_handler(event, context):
+    request = event['Records'][0]['cf']['request']
+    headers = request['headers']
+
+    # CloudFront-Viewer-Country ヘッダーから国判定
+    country = headers.get('cloudfront-viewer-country', [{}])[0].get('value', 'US')
+
+    # 国別オリジン振り分け
+    origin_map = {
+        'JP': 'origin-jp.example.com',
+        'US': 'origin-us.example.com',
+        'GB': 'origin-eu.example.com'
+    }
+
+    origin = origin_map.get(country, 'origin-us.example.com')
+    request['origin']['custom']['domainName'] = origin
+
+    return request
+```
+
+---
+
+## 67. DNS自動化フレームワーク
+
+### Infrastructure as Codeの高度な活用
+- Terragrunt でのマルチアカウント管理
+- CDK Custom Constructsの活用
+- Ansible/Saltstack でのDNS Orchestration
+- GitOps（FluxCD/ArgoCD）でのDNS管理
+
+**Terragrunt 多層構造**:
+```hcl
+# terragrunt.hcl（ルート）
+terraform {
+  source = "git::https://github.com/org/terraform-modules.git//route53"
+}
+
+inputs = {
+  domain_name = "example.com"
+  environment = "production"
+
+  records = [
+    {
+      name = "www"
+      type = "A"
+      alias = {
+        name = "d111111abcdef8.cloudfront.net"
+        zone_id = "Z2FDTNDATAQYW2"
+      }
+    }
+  ]
+}
+```
+
+**CDK Custom Construct（再利用可能）**:
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as targets from 'aws-cdk-lib/aws-route53-targets';
+
+export class DnsStack extends cdk.Stack {
+  constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    // 再利用可能なDNSパターン
+    new route53.ARecord(this, 'WebsiteAlias', {
+      zone: hostedZone,
+      target: route53.RecordTarget.fromAlias(
+        new targets.CloudFrontTarget(distribution)
+      ),
+      recordName: 'www'
+    });
+  }
+}
+```
+
+**FluxCD GitOps DNS管理**:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns-records
+  namespace: flux-system
+data:
+  records.yaml: |
+    - name: api.example.com
+      type: A
+      ttl: 300
+      value: 192.0.2.1
+    - name: www.example.com
+      type: CNAME
+      ttl: 3600
+      value: cdn.example.com
+```
+
+---
+
+## 68. DNS脅威ハンティングと異常検知
+
+### AIベースの異常検知
+- Machine Learning モデルでのアノマリー検出
+- GuardDuty DNS統合
+- CloudWatch Anomaly Detection
+- 自動対処（Lambda自動修復）
+
+**CloudWatch Anomaly Detection**:
+```bash
+# 異常検知アラーム作成
+aws cloudwatch put-metric-alarm \
+  --alarm-name dns-query-anomaly \
+  --metric-name DNSQueries \
+  --namespace AWS/Route53 \
+  --statistic Sum \
+  --period 300 \
+  --evaluation-periods 1 \
+  --threshold-metric-id ad1 \
+  --comparison-operator LessThanLowerOrGreaterThanUpperThreshold \
+  --alarm-actions arn:aws:sns:region:account:topic
+```
+
+**GuardDuty DNS分析**:
+```python
+# GuardDuty findings から DNS異常検出
+import boto3
+
+guardduty = boto3.client('guardduty')
+
+def analyze_dns_findings():
+    findings = guardduty.list_findings(
+        DetectorId='detector-id',
+        FindingCriteria={
+            'Criterion': {
+                'type': {'Eq': ['Trojan:EC2/DNSDataExfiltration']}
+            }
+        }
+    )
+
+    for finding_id in findings['FindingIds']:
+        detail = guardduty.get_findings(
+            DetectorId='detector-id',
+            FindingIds=[finding_id]
+        )
+        # 自動隔離・通知
+        remediate_dns_threat(detail)
+```
+
+**自動修復Lambda**:
+```python
+def lambda_handler(event, context):
+    # CloudWatch Alarmトリガー
+    alarm_name = event['alarmData']['alarmName']
+
+    if alarm_name == 'dns-query-anomaly':
+        # 一時的にレート制限強化
+        apply_rate_limiting()
+
+        # セキュリティチームに通知
+        send_security_alert()
+
+        # 詳細調査のためログ保存
+        export_query_logs_to_s3()
+```
+
+---
+
+## 69. マルチテナントDNS管理
+
+### SaaS/マルチテナント環境のDNS設計
+- テナント専用サブドメイン自動プロビジョニング
+- Wildcard証明書管理
+- テナント隔離とセキュリティ
+- 動的DNS更新API
+
+**テナントプロビジョニング自動化**:
+```python
+import boto3
+
+route53 = boto3.client('route53')
+acm = boto3.client('acm')
+
+def provision_tenant_dns(tenant_id, tenant_name):
+    subdomain = f"{tenant_name}.app.example.com"
+
+    # 1. DNSレコード作成
+    route53.change_resource_record_sets(
+        HostedZoneId='Z1234567890ABC',
+        ChangeBatch={
+            'Changes': [{
+                'Action': 'CREATE',
+                'ResourceRecordSet': {
+                    'Name': subdomain,
+                    'Type': 'A',
+                    'AliasTarget': {
+                        'HostedZoneId': 'Z2FDTNDATAQYW2',
+                        'DNSName': 'd111111abcdef8.cloudfront.net',
+                        'EvaluateTargetHealth': False
+                    }
+                }
+            }]
+        }
+    )
+
+    # 2. ACM証明書検証（DNS検証）
+    # ワイルドカード証明書（*.app.example.com）使用で効率化
+
+    # 3. テナント情報DBに登録
+    save_tenant_config(tenant_id, subdomain)
+
+    return subdomain
+```
+
+**SaaS DNS APIゲートウェイ**:
+```yaml
+# API Gateway定義
+paths:
+  /tenants/{tenantId}/dns:
+    post:
+      summary: テナント専用DNSレコード作成
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subdomain:
+                  type: string
+                  example: "customer1"
+                record_type:
+                  type: string
+                  enum: [A, CNAME, TXT]
+      responses:
+        '201':
+          description: DNS record created
+```
+
+---
+
+## 70. DNSキャパシティプランニング
+
+### 将来の成長を見据えた設計
+- トラフィック予測とスケーリング計画
+- クォータ事前申請戦略
+- コスト予測モデル
+- パフォーマンス劣化の早期検知
+
+**成長予測モデル**:
+```python
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
+# 過去6ヶ月のDNSクエリ数
+data = {
+    'month': [1, 2, 3, 4, 5, 6],
+    'queries': [1000000, 1200000, 1500000, 1800000, 2200000, 2700000]
+}
+
+df = pd.DataFrame(data)
+model = LinearRegression()
+model.fit(df[['month']], df['queries'])
+
+# 12ヶ月後の予測
+future_month = 12
+predicted_queries = model.predict([[future_month]])
+print(f"12ヶ月後の予測クエリ数: {predicted_queries[0]:,.0f}")
+
+# クォータ拡張タイミング計算
+if predicted_queries > 5000000:
+    print("アラート: クォータ拡張申請を推奨")
+```
+
+**コスト最適化シミュレーション**:
+```python
+# Route53 料金計算（2025年想定）
+HOSTED_ZONE_COST = 0.50  # $/月/zone
+QUERY_COST_PER_MILLION = 0.40  # $/百万クエリ
+
+def calculate_dns_cost(zones, monthly_queries):
+    zone_cost = zones * HOSTED_ZONE_COST
+    query_cost = (monthly_queries / 1000000) * QUERY_COST_PER_MILLION
+    total = zone_cost + query_cost
+
+    return {
+        'zone_cost': zone_cost,
+        'query_cost': query_cost,
+        'total_monthly': total,
+        'total_annual': total * 12
+    }
+
+# シナリオ分析
+scenario_1 = calculate_dns_cost(50, 10000000)  # 50ゾーン、1000万クエリ/月
+scenario_2 = calculate_dns_cost(100, 50000000)  # 100ゾーン、5000万クエリ/月
+```
+
+---
+
+## 71. エッジコンピューティングとDNS
+
+### Edge-optimized DNS戦略
+- CloudFront + Lambda@Edge での動的DNS
+- AWS Global Accelerator統合
+- ローカルDNSキャッシュ（Varnish/NGINX）
+- エッジロケーション最適化
+
+**Global Accelerator with DNS**:
+```bash
+# Global Accelerator作成
+aws globalaccelerator create-accelerator \
+  --name my-app-accelerator \
+  --ip-address-type IPV4 \
+  --enabled
+
+# DNS経由でAccelerator参照
+# → Route53 Alias レコードで Global Accelerator DNS名を指定
+```
+
+**NGINX DNS キャッシュ設定**:
+```nginx
+http {
+    # DNSリゾルバ設定（VPC DNSサーバ）
+    resolver 169.254.169.253 valid=300s;
+    resolver_timeout 5s;
+
+    # DNS キャッシュ有効化
+    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=dns_cache:10m;
+
+    upstream backend {
+        server backend.example.com;
+        keepalive 32;
+    }
+
+    server {
+        location / {
+            proxy_pass http://backend;
+            proxy_cache dns_cache;
+            proxy_cache_valid 200 5m;
+        }
+    }
+}
+```
+
+---
+
+## 72. DNS移行の高度な戦略
+
+### ゼロダウンタイム移行
+- Dual-run（並行運用）期間の設計
+- DNS TTL段階的短縮
+- ロールバック計画
+- 移行後の検証自動化
+
+**移行フェーズ設計**:
+```markdown
+Phase 1: 準備（T-30日）
+- [ ] 新DNS環境構築
+- [ ] TTL短縮（86400秒 → 300秒）
+- [ ] モニタリング強化
+
+Phase 2: Dual-run（T-7日）
+- [ ] 新旧DNSで同一レコード維持
+- [ ] トラフィック監視
+- [ ] エラー率確認
+
+Phase 3: 段階移行（T-0日）
+- [ ] NSレコード変更
+- [ ] プロパゲーション監視
+- [ ] トラフィック比率確認
+
+Phase 4: 検証（T+7日）
+- [ ] 旧DNS完全停止
+- [ ] TTL正常化（300秒 → 3600秒）
+- [ ] コスト最適化
+```
+
+**自動検証スクリプト**:
+```bash
+#!/bin/bash
+# DNS移行検証スクリプト
+
+DOMAIN="example.com"
+OLD_NS="ns1.old-provider.com"
+NEW_NS="ns1.route53.awsdns.com"
+
+# 各リゾルバでの解決結果比較
+dig @${OLD_NS} ${DOMAIN} A +short > /tmp/old_result
+dig @${NEW_NS} ${DOMAIN} A +short > /tmp/new_result
+
+if diff /tmp/old_result /tmp/new_result; then
+    echo "✅ DNS records match"
+else
+    echo "❌ DNS records mismatch - ROLLBACK REQUIRED"
+    exit 1
+fi
+```
+
+---
+
+## 73. DNS変更管理とガバナンス
+
+### エンタープライズDNS変更プロセス
+- Change Advisory Board（CAB）承認フロー
+- 4-eyes principleの実装
+- 自動承認（低リスク変更）
+- 変更履歴の完全監査
+
+**DNS変更承認ワークフロー**:
+```yaml
+# GitHub Actions でDNS変更承認
+name: DNS Change Approval
+
+on:
+  pull_request:
+    paths:
+      - 'dns/**'
+
+jobs:
+  risk-assessment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: DNS変更リスク評価
+        run: |
+          # 変更されたゾーン数をチェック
+          CHANGED_ZONES=$(git diff --name-only main | grep -c "dns/")
+
+          if [ $CHANGED_ZONES -gt 5 ]; then
+            echo "高リスク変更: CAB承認必須"
+            # Slack通知 → CABメンバーに承認依頼
+          else
+            echo "低リスク変更: 自動承認可"
+          fi
+
+      - name: Terraform Plan
+        run: |
+          cd dns/
+          terraform plan -out=tfplan
+
+      - name: 承認待ち
+        uses: trstringer/manual-approval@v1
+        with:
+          approvers: dns-admins,network-team
+          minimum-approvals: 2
+```
+
+**変更履歴の完全記録**:
+```python
+# DynamoDB に全DNS変更記録
+import boto3
+from datetime import datetime
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('dns-change-history')
+
+def record_dns_change(zone_id, record_name, change_type, approved_by):
+    table.put_item(
+        Item={
+            'change_id': str(uuid.uuid4()),
+            'timestamp': datetime.utcnow().isoformat(),
+            'zone_id': zone_id,
+            'record_name': record_name,
+            'change_type': change_type,  # CREATE/UPDATE/DELETE
+            'approved_by': approved_by,
+            'applied': False
+        }
+    )
+```
+
+---
+
+## 74. DNS依存関係マッピング
+
+### アプリケーションDNS依存性の可視化
+- サービスメッシュトポロジー
+- CMDB（Configuration Management Database）統合
+- 影響範囲分析
+- 依存関係グラフの自動生成
+
+**依存関係グラフ生成**:
+```python
+import networkx as nx
+import matplotlib.pyplot as plt
+
+# DNS依存関係グラフ
+G = nx.DiGraph()
+
+# ノード追加（DNSレコード）
+G.add_node("www.example.com", type="A")
+G.add_node("cdn.example.com", type="CNAME")
+G.add_node("api.example.com", type="A")
+G.add_node("lb.us-east-1.elb.amazonaws.com", type="ELB")
+
+# エッジ追加（依存関係）
+G.add_edge("www.example.com", "cdn.example.com")
+G.add_edge("cdn.example.com", "lb.us-east-1.elb.amazonaws.com")
+
+# グラフ描画
+pos = nx.spring_layout(G)
+nx.draw(G, pos, with_labels=True, node_color='lightblue',
+        node_size=3000, font_size=10, arrows=True)
+plt.savefig("dns-dependency-graph.png")
+```
+
+**影響範囲分析ツール**:
+```bash
+#!/bin/bash
+# DNSレコード変更の影響範囲分析
+
+RECORD="api.example.com"
+
+echo "=== ${RECORD} の依存関係分析 ==="
+
+# 1. このレコードを参照しているCNAME
+dig ${RECORD} CNAME +short
+
+# 2. このレコードのAliasターゲット
+aws route53 list-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --query "ResourceRecordSets[?contains(Name, '${RECORD}')]"
+
+# 3. アプリケーションログから参照元調査
+grep -r "${RECORD}" /var/log/app/
+```
+
+---
+
+## 75. DNS SLA（Service Level Agreement）管理
+
+### SLA定義と測定
+- 可用性目標（99.9%、99.99%、99.999%）
+- DNSクエリ成功率
+- 平均応答時間（レイテンシ）
+- SLA違反時の自動エスカレーション
+
+**SLA定義例**:
+```yaml
+DNS SLA 2025:
+  availability: 99.99%  # 年間ダウンタイム52分以内
+  query_success_rate: 99.95%
+  average_response_time: 50ms
+
+  measurement_period: monthly
+
+  penalties:
+    - breach_level: 99.9-99.99%
+      penalty: 10% 月額料金返金
+    - breach_level: <99.9%
+      penalty: 25% 月額料金返金
+```
+
+**SLA測定ダッシュボード**:
+```python
+import boto3
+from datetime import datetime, timedelta
+
+cloudwatch = boto3.client('cloudwatch')
+
+def calculate_dns_sla(zone_id, start_time, end_time):
+    # DNSクエリ総数
+    total_queries = cloudwatch.get_metric_statistics(
+        Namespace='AWS/Route53',
+        MetricName='DNSQueries',
+        Dimensions=[{'Name': 'HostedZoneId', 'Value': zone_id}],
+        StartTime=start_time,
+        EndTime=end_time,
+        Period=3600,
+        Statistics=['Sum']
+    )
+
+    # 成功クエリ数（エラーなし）
+    successful_queries = total_queries - failed_queries
+
+    # SLA計算
+    success_rate = (successful_queries / total_queries) * 100
+
+    if success_rate >= 99.99:
+        sla_status = "✅ SLA達成"
+    else:
+        sla_status = f"❌ SLA未達 ({success_rate:.2f}%)"
+
+    return sla_status
+```
+
+---
+
+## 76. DNS BackupとDisaster Recovery（DR）
+
+### 包括的バックアップ戦略
+- ゾーンファイルの自動バックアップ
+- クロスリージョンレプリケーション
+- セカンダリDNSプロバイダ（NS Records分散）
+- 定期的なDRテスト
+
+**自動バックアップスクリプト**:
+```python
+import boto3
+import json
+from datetime import datetime
+
+route53 = boto3.client('route53')
+s3 = boto3.client('s3')
+
+def backup_all_zones():
+    zones = route53.list_hosted_zones()
+
+    for zone in zones['HostedZones']:
+        zone_id = zone['Id'].split('/')[-1]
+        zone_name = zone['Name']
+
+        # 全レコード取得
+        records = route53.list_resource_record_sets(HostedZoneId=zone_id)
+
+        # S3にバックアップ
+        backup_key = f"dns-backups/{zone_name}/{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        s3.put_object(
+            Bucket='dns-backup-bucket',
+            Key=backup_key,
+            Body=json.dumps(records, indent=2),
+            ServerSideEncryption='AES256'
+        )
+
+        print(f"✅ Backed up: {zone_name} → s3://dns-backup-bucket/{backup_key}")
+
+# 日次実行（EventBridge Rule）
+```
+
+**DRリストア手順**:
+```bash
+#!/bin/bash
+# DNS災害復旧リストア
+
+BACKUP_FILE="s3://dns-backup-bucket/dns-backups/example.com/20250106-120000.json"
+ZONE_ID="Z1234567890ABC"
+
+# 1. バックアップダウンロード
+aws s3 cp ${BACKUP_FILE} /tmp/dns-backup.json
+
+# 2. 現在のレコード全削除（緊急時のみ）
+# aws route53 list-resource-record-sets ... | jq で削除バッチ生成
+
+# 3. バックアップからリストア
+cat /tmp/dns-backup.json | jq -r '.ResourceRecordSets[]' | while read record; do
+    aws route53 change-resource-record-sets \
+      --hosted-zone-id ${ZONE_ID} \
+      --change-batch file://<(echo $record)
+done
+```
+
+---
+
+## 77. DNS負荷テストとキャパシティ検証
+
+### 大規模トラフィックシミュレーション
+- DNS Flood攻撃シミュレーション
+- 正常時の2倍/5倍/10倍負荷テスト
+- フェイルオーバー切替時のスパイク対策
+- レイテンシボトルネック特定
+
+**負荷テストツール（dnsperf）**:
+```bash
+# dnsperf インストール
+sudo apt-get install dnsperf
+
+# テストデータ作成
+cat > queryfile.txt <<EOF
+www.example.com A
+api.example.com A
+cdn.example.com CNAME
+EOF
+
+# 負荷テスト実行（10万クエリ、1000 QPS）
+dnsperf -s ns1.route53.awsdns.com \
+  -d queryfile.txt \
+  -c 100 \
+  -l 100000 \
+  -Q 1000
+
+# 結果分析
+# - Queries sent: 100000
+# - Queries completed: 99995
+# - Queries lost: 5 (0.005%)
+# - Response codes: NOERROR 99995
+# - Average Latency: 25ms
+# - Run time: 100.5s
+```
+
+**CloudWatch によるテスト結果分析**:
+```python
+import boto3
+
+cloudwatch = boto3.client('cloudwatch')
+
+# 負荷テスト中のメトリクス確認
+response = cloudwatch.get_metric_statistics(
+    Namespace='AWS/Route53',
+    MetricName='DNSQueries',
+    Dimensions=[{'Name': 'HostedZoneId', 'Value': 'Z1234567890ABC'}],
+    StartTime=datetime(2025, 1, 6, 12, 0),
+    EndTime=datetime(2025, 1, 6, 13, 0),
+    Period=60,
+    Statistics=['Sum', 'Average', 'Maximum']
+)
+
+# ピークQPS算出
+peak_qps = max([dp['Sum']/60 for dp in response['Datapoints']])
+print(f"ピークQPS: {peak_qps:.0f}")
+```
+
+---
+
+## 78. マイクロサービスとDNS
+
+### Service Meshでの高度なDNS活用
+- Istio/Linkerd との統合
+- Sidecar Proxy経由のDNS
+- Circuit Breaker パターン
+- Retry/Timeout 戦略
+
+**Istio VirtualService（DNS ルーティング）**:
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api-routing
+spec:
+  hosts:
+  - api.example.com
+  http:
+  - match:
+    - headers:
+        version:
+          exact: "v2"
+    route:
+    - destination:
+        host: api-v2.default.svc.cluster.local
+        port:
+          number: 8080
+  - route:
+    - destination:
+        host: api-v1.default.svc.cluster.local
+        port:
+          number: 8080
+      weight: 90
+    - destination:
+        host: api-v2.default.svc.cluster.local
+        port:
+          number: 8080
+      weight: 10  # カナリアリリース 10%
+```
+
+**Circuit Breaker設定**:
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-circuit-breaker
+spec:
+  host: api.example.com
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 2
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+```
+
+---
+
+## 79. DNS Compliance自動監査
+
+### 継続的コンプライアンス検証
+- AWS Config Rules でのDNS設定監査
+- DNSSEC有効化の強制
+- 公開ゾーンのCAA必須化
+- 定期的なセキュリティスキャン
+
+**AWS Config Rule（カスタム）**:
+```python
+import boto3
+import json
+
+route53 = boto3.client('route53')
+config = boto3.client('config')
+
+def lambda_handler(event, context):
+    # 全Hosted Zone取得
+    zones = route53.list_hosted_zones()
+
+    non_compliant_resources = []
+
+    for zone in zones['HostedZones']:
+        zone_id = zone['Id'].split('/')[-1]
+        records = route53.list_resource_record_sets(HostedZoneId=zone_id)
+
+        # CAA レコード存在確認
+        has_caa = any(r['Type'] == 'CAA' for r in records['ResourceRecordSets'])
+
+        if not has_caa:
+            non_compliant_resources.append({
+                'ResourceType': 'AWS::Route53::HostedZone',
+                'ResourceId': zone_id,
+                'ComplianceType': 'NON_COMPLIANT',
+                'Annotation': 'CAA record is missing'
+            })
+
+    # Config に結果送信
+    config.put_evaluations(
+        Evaluations=[{
+            'ComplianceResourceType': r['ResourceType'],
+            'ComplianceResourceId': r['ResourceId'],
+            'ComplianceType': r['ComplianceType'],
+            'Annotation': r['Annotation'],
+            'OrderingTimestamp': datetime.now()
+        } for r in non_compliant_resources],
+        ResultToken=event['resultToken']
+    )
+```
+
+**Security Hub統合**:
+```yaml
+# Security Hub カスタムアクション
+Custom Action:
+  Name: "DNS Security Scan"
+  Description: "全DNSゾーンのセキュリティスキャン"
+
+  Checks:
+    - DNSSEC有効化
+    - CAA レコード存在
+    - SPF/DKIM/DMARC設定
+    - 不要なパブリックレコード
+    - Wildcard証明書の適切な使用
+```
+
+---
+
+## 80. 次世代DNSとHTTP/3
+
+### 最新プロトコルへの対応
+- DNS over HTTPS (DoH) の活用
+- DNS over TLS (DoT) 実装
+- HTTP/3 (QUIC) でのDNS最適化
+- 0-RTT (Zero Round Trip Time) 接続
+
+**DoH クライアント設定**:
+```python
+import requests
+
+# Cloudflare DoH
+DOH_URL = "https://cloudflare-dns.com/dns-query"
+
+def doh_query(domain, record_type="A"):
+    params = {
+        'name': domain,
+        'type': record_type
+    }
+    headers = {
+        'accept': 'application/dns-json'
+    }
+
+    response = requests.get(DOH_URL, params=params, headers=headers)
+    return response.json()
+
+# 使用例
+result = doh_query("example.com", "A")
+print(f"IP Address: {result['Answer'][0]['data']}")
+```
+
+**CloudFront HTTP/3有効化**:
+```bash
+# CloudFront Distribution でHTTP/3有効化
+aws cloudfront update-distribution \
+  --id E1234567890ABC \
+  --distribution-config '{
+    "HttpVersion": "http2and3",
+    "Comment": "HTTP/3 enabled for faster DNS resolution"
+  }'
+```
+
+**0-RTT 最適化（NGINX）**:
+```nginx
+http {
+    ssl_protocols TLSv1.3;
+    ssl_early_data on;
+
+    server {
+        listen 443 ssl http2 http3;
+
+        # QUIC/HTTP3 での DNS プリフェッチ
+        add_header Alt-Svc 'h3=":443"; ma=86400';
+
+        location / {
+            # 0-RTT 接続でのDNSルックアップ削減
+            proxy_pass https://backend;
+            proxy_ssl_session_reuse on;
+        }
+    }
+}
+```
+
+**将来展望**:
+- DNS over QUIC (DoQ) の実装
+- Encrypted Client Hello (ECH) 統合
+- AI駆動の予測的DNS解決
+- Quantum-safe DNS署名
+
+---
+
+## 追加：Level 7 運用成熟度（次世代）
+
+### Level 7: Next-Gen DNS Architecture
+- [ ] DoH/DoT/DoQ完全実装
+- [ ] HTTP/3 (QUIC) 最適化
+- [ ] AI予測的DNS解決
+- [ ] Quantum-safe暗号化対応
+- [ ] 完全自律型DNSシステム
+
+---
+
+## 最終チェックリスト：80項目完全版
+
+### 基礎編（1-10）
+- [ ] メール認証（SPF/DKIM/DMARC）
+- [ ] CNAME制約理解
+- [ ] TTL戦略
+- [ ] MX優先度
+- [ ] CAA設定
+- [ ] NSレコード管理
+- [ ] ワイルドカード活用
+- [ ] IPv6対応
+- [ ] TXT長さ制限
+- [ ] プロパゲーション理解
+
+### 中級編（11-30）
+- [ ] サブドメイン委任
+- [ ] SRV/PTR/SOA管理
+- [ ] DNSSEC
+- [ ] GeoDNS/Latency-based
+- [ ] ヘルスチェック/フェイルオーバー
+- [ ] クエリログ/監査
+- [ ] DDoS対策
+- [ ] ハイブリッドDNS
+- [ ] Zone Apex最適化
+- [ ] ラウンドロビン
+- [ ] DoH/DoT
+- [ ] DDNS
+- [ ] セカンダリDNS
+- [ ] 冗長性確認
+- [ ] TTLとRTO
+- [ ] テスト環境
+- [ ] Zone Transfer
+- [ ] Split-Horizon
+- [ ] キャッシュポイズニング対策
+- [ ] RPZ
+
+### 上級編（31-50）
+- [ ] トラフィックポリシー
+- [ ] Weighted/Latency ルーティング
+- [ ] Alias vs CNAME使い分け
+- [ ] フェイルオーバーテスト
+- [ ] リゾルバ最適化
+- [ ] 監視・アラート
+- [ ] 移行戦略
+- [ ] IaC管理
+- [ ] マルチアカウント管理
+- [ ] API/SDK活用
+- [ ] ACM統合
+- [ ] CI/CD統合
+- [ ] Blue/Green デプロイ
+- [ ] カナリアデプロイ
+- [ ] レコードバージョン管理
+- [ ] ゾーンファイル管理
+- [ ] クエリ分析
+- [ ] コスト最適化
+- [ ] DR計画
+- [ ] コンプライアンス
+
+### 超上級編（51-60）
+- [ ] レガシー移行
+- [ ] サービスメッシュ連携
+- [ ] 手動フォールバック準備
+- [ ] カオスエンジニアリング
+- [ ] マルチクラウド統合
+- [ ] Private Zone連携
+- [ ] クォータ管理
+- [ ] 完全自動化運用
+- [ ] AIベース異常検知
+- [ ] セルフヒーリングDNS
+
+### エキスパート編（61-80）
+- [ ] DNS可観測性実装
+- [ ] Zero Trust DNS
+- [ ] 高度な負荷分散（GSLB）
+- [ ] パフォーマンスチューニング
+- [ ] コンテナ環境DNS管理
+- [ ] サーバーレスDNS統合
+- [ ] DNS自動化フレームワーク
+- [ ] 脅威ハンティング
+- [ ] マルチテナントDNS
+- [ ] キャパシティプランニング
+- [ ] エッジコンピューティング統合
+- [ ] ゼロダウンタイム移行
+- [ ] 変更管理ガバナンス
+- [ ] 依存関係マッピング
+- [ ] SLA管理
+- [ ] Backup/DR自動化
+- [ ] 負荷テスト/キャパシティ検証
+- [ ] マイクロサービスDNS
+- [ ] Compliance自動監査
+- [ ] HTTP/3とDoH/DoT/DoQ
+
+---
+
+**🎊 全80項目の究極DNSマスターガイド完成！🎊**
+
+**習得レベルガイド**:
+- **基礎編（1-10）**: DNS初学者 → 3ヶ月で習得
+- **中級編（11-30）**: 実務経験1年 → 6ヶ月で習得
+- **上級編（31-50）**: DevOpsエンジニア → 1年で習得
+- **超上級編（51-60）**: SREスペシャリスト → 2年で習得
+- **エキスパート編（61-80）**: DNSアーキテクト → 3年で習得
+
+**推奨学習パス**:
+1. まず基礎編10項目を完全習得
+2. 中級編を実務で段階的に適用
+3. 上級編でDevOps/IaC実践
+4. 超上級編でエンタープライズ運用
+5. エキスパート編で業界最先端技術習得
+
+**継続的改善**:
+- 毎月1項目ずつ深掘り学習
+- 実環境での実践と検証
+- コミュニティ（AWS forums、re:Invent等）での知識共有
+- 最新DNS RFC/ドラフトの追跡
+
+---
+
+**本ガイドがあなたのDNS専門性向上に貢献することを願っています！🚀**
