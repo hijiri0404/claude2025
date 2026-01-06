@@ -719,3 +719,620 @@ Day 2:  旧DNSサーバー停止判断
 - [ ] Split-Horizon DNS運用
 - [ ] 自動化・IaC管理
 - [ ] ディザスタリカバリ計画
+
+---
+
+## 41. DNS as Code（IaC管理）
+
+### Infrastructure as Codeでの宣言的管理
+- CloudFormation/Terraform/CDKでDNS管理
+- バージョン管理とコードレビュー
+- CI/CDパイプラインでの自動デプロイ
+- 環境間の設定差分管理
+
+**Terraformサンプル**:
+```hcl
+resource "aws_route53_record" "www" {
+  zone_id = aws_route53_zone.primary.zone_id
+  name    = "www.example.com"
+  type    = "A"
+  ttl     = 300
+  records = [aws_instance.web.public_ip]
+}
+```
+
+**利点**:
+- 設定の再現性・監査証跡
+- 複数環境の一貫性保証
+- チーム協業の効率化
+
+---
+
+## 42. マルチアカウントDNS管理
+
+### AWS Organizations環境での集中管理
+- 中央集権DNSアカウント vs 分散管理
+- クロスアカウントRoute53アソシエーション
+- Private Hosted Zoneの共有
+- 権限委譲とIAMポリシー設計
+
+**ベストプラクティス**:
+- DNSアカウントをネットワークアカウントに統合
+- Service Control Policies (SCP) で保護
+- Resource Access Manager (RAM) で共有
+
+**構成例**:
+```
+Network Account (DNS集中管理)
+├── Public Hosted Zones
+│   └── 全組織のパブリックドメイン
+└── Private Hosted Zones
+    └── VPC Association (他アカウントから)
+
+Workload Account A, B, C...
+└── VPC → Private Hosted Zone関連付け
+```
+
+---
+
+## 43. DNS APIとSDK活用
+
+### プログラマティックなDNS操作
+- AWS SDK (Python/JavaScript/Go等)
+- Route53 API直接呼び出し
+- 動的レコード更新の自動化
+- カスタムDNS管理ツール開発
+
+**Python Boto3サンプル**:
+```python
+import boto3
+
+client = boto3.client('route53')
+response = client.change_resource_record_sets(
+    HostedZoneId='Z1234567890ABC',
+    ChangeBatch={
+        'Changes': [{
+            'Action': 'UPSERT',
+            'ResourceRecordSet': {
+                'Name': 'api.example.com',
+                'Type': 'A',
+                'TTL': 300,
+                'ResourceRecords': [{'Value': '192.0.2.1'}]
+            }
+        }]
+    }
+)
+```
+
+**ユースケース**:
+- コンテナIPの動的登録
+- Auto Scalingとの連携
+- 一時的なメンテナンス用レコード
+
+---
+
+## 44. DNS証明書統合（ACM連携）
+
+### AWS Certificate Managerとの統合
+- DNS検証による証明書自動発行
+- ワイルドカード証明書のDNS検証
+- 証明書更新の自動化
+- CNAMEレコード自動追加
+
+**証明書発行フロー**:
+```
+1. ACMで証明書リクエスト
+2. DNS検証選択
+3. Route53にCNAMEレコード自動追加
+4. 検証完了・証明書発行
+5. 証明書更新時も自動検証
+```
+
+**自動化のポイント**:
+- Route53とACMが同一アカウントなら自動
+- クロスアカウントの場合は手動CNAME追加
+- CloudFormation/Terraformで完全自動化可能
+
+---
+
+## 45. DNSとCI/CDパイプライン統合
+
+### デプロイメントパイプラインでのDNS更新
+- アプリケーションデプロイ後のDNS自動更新
+- Blue/Greenデプロイ時の自動切替
+- カナリアリリース時の段階的トラフィック移行
+- ロールバック時のDNS復元
+
+**CodePipeline統合例**:
+```
+Source → Build → Test → Deploy
+                           ↓
+                    Update Route53
+                    (Lambda/Step Functions)
+```
+
+**考慮事項**:
+- デプロイ成功確認後にDNS更新
+- ヘルスチェック通過を待機
+- TTL期間の待機（完全切替まで）
+
+---
+
+## 46. DNS Blue/Greenデプロイ
+
+### 無停止デプロイメント戦略
+- 新環境（Green）並行構築
+- DNSレコードで一斉切替
+- 旧環境（Blue）は待機・ロールバック用
+- Weighted Routingで段階的移行も可能
+
+**手順**:
+```
+1. Green環境構築・検証
+2. Route53でWeight調整
+   - Blue: 100%, Green: 0%
+   - Blue: 50%, Green: 50%  (テスト)
+   - Blue: 0%, Green: 100%  (完全移行)
+3. Blue環境削除 or 次回リリース待機
+```
+
+**TTL戦略**:
+- 切替前にTTL短縮（60-300秒）
+- 完全移行後にTTL延長（3600秒等）
+
+---
+
+## 47. DNSカナリアデプロイ
+
+### 段階的なトラフィック移行
+- Weighted Routingで新バージョンに少量トラフィック
+- エラー率監視しながら段階的に増加
+- 問題発生時の即座ロールバック
+- A/Bテストにも応用可能
+
+**段階的移行例**:
+```
+Phase 1: 旧95% / 新5%   (初期カナリア)
+Phase 2: 旧80% / 新20%  (拡大)
+Phase 3: 旧50% / 新50%  (半数移行)
+Phase 4: 旧0% / 新100%  (完全移行)
+```
+
+**監視指標**:
+- エラー率（4xx/5xx）
+- レイテンシー
+- ビジネスメトリクス
+- ユーザーフィードバック
+
+---
+
+## 48. DNSレコードバージョン管理
+
+### 変更履歴の追跡と監査
+- Route53 Change Historyの活用
+- CloudTrailでのAPI操作記録
+- Gitでの設定バージョン管理（IaC）
+- タグによる変更理由記録
+
+**Change History確認**:
+```bash
+aws route53 list-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --max-items 100
+```
+
+**CloudTrail監査クエリ**:
+```sql
+SELECT eventTime, userIdentity.principalId,
+       requestParameters
+FROM cloudtrail_logs
+WHERE eventName = 'ChangeResourceRecordSets'
+  AND eventTime > '2025-01-01'
+```
+
+**ベストプラクティス**:
+- 全DNS変更をGitにコミット
+- Pull Requestでレビュープロセス
+- タグで変更チケット番号を記録
+
+---
+
+## 49. DNSゾーンファイル管理
+
+### BIND形式ゾーンファイルの扱い
+- Route53からのエクスポート
+- 他DNSサービスへのインポート
+- バックアップとしてのゾーンファイル保存
+- ゾーンファイル差分による変更レビュー
+
+**ゾーンファイルエクスポート**:
+```bash
+aws route53 list-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --output text > zone-backup.txt
+```
+
+**BIND形式変換ツール**:
+- cli53 (サードパーティツール)
+- route53-transfer (バックアップツール)
+- カスタムスクリプトでの変換
+
+---
+
+## 50. DNSクエリ分析とインサイト
+
+### CloudWatch Insights活用
+- クエリログからのパターン分析
+- 異常検知とアノマリー検出
+- トラフィック傾向の可視化
+- セキュリティ脅威の検出
+
+**Insights クエリ例**:
+```
+fields @timestamp, query_name, query_type, rcode
+| filter rcode = "NXDOMAIN"
+| stats count() by query_name
+| sort count desc
+| limit 20
+```
+
+**分析観点**:
+- 最も問い合わせの多いレコード
+- 存在しないドメインへのクエリ（NXDOMAIN）
+- クエリ元IP分析（DDoS検知）
+- 応答時間の分布
+
+---
+
+## 51. DNSコスト最適化
+
+### Route53コスト削減戦略
+- ホストゾーン数の最適化（$0.50/月/zone）
+- クエリ料金の削減（Aliasレコード無料活用）
+- 不要なヘルスチェック削除（$0.50/月/check）
+- トラフィックポリシー見直し
+
+**コスト要因**:
+| 項目 | 料金 |
+|------|------|
+| ホストゾーン | $0.50/月/zone |
+| 標準クエリ | $0.40/100万クエリ |
+| Aliasクエリ | 無料 |
+| ヘルスチェック | $0.50/月/check |
+| トラフィックポリシー | $50/月/policy |
+
+**最適化Tips**:
+- CNAMEをAliasに置換（無料化）
+- サブドメイン委任でzone削減検討
+- 不要なヘルスチェック停止
+
+---
+
+## 52. DNS災害復旧（DR）
+
+### DNS基盤のBCP/DR計画
+- セカンダリDNSプロバイダの準備
+- ゾーンファイル定期バックアップ
+- NSレコード切替手順の文書化
+- RTO/RPOの定義とテスト
+
+**DR戦略**:
+```
+Primary: AWS Route53
+Secondary: Cloudflare/Dyn/他プロバイダ
+
+障害時:
+1. セカンダリにゾーン同期
+2. レジストラでNSレコード変更
+3. プロパゲーション待ち（最大48h）
+```
+
+**定期訓練**:
+- 年1回のDR訓練実施
+- ゾーンファイル復元テスト
+- セカンダリプロバイダへの切替訓練
+
+---
+
+## 53. DNSコンプライアンス
+
+### 規制対応とガバナンス
+- データ主権（データレジデンシー）要件
+- GDPR/個人情報保護法対応
+- クエリログの保管期間管理
+- SOC2/ISO27001監査対応
+
+**コンプライアンス観点**:
+- [ ] DNSクエリログの暗号化保存
+- [ ] アクセス制御とIAMポリシー
+- [ ] 変更履歴の監査証跡（CloudTrail）
+- [ ] データ保管リージョンの制限
+
+**GDPR対応**:
+- クエリログに含まれるIPアドレスの扱い
+- データ保管場所の制限
+- データ削除要求への対応手順
+
+---
+
+## 54. レガシーDNS移行
+
+### オンプレミスDNSからクラウドへ
+- BIND/Windows DNSからRoute53移行
+- ゾーンファイルのインポート
+- 段階的移行戦略（テストドメイン先行）
+- 並行稼働期間の設定
+
+**移行手順**:
+```
+1. 現行DNSゾーンファイルエクスポート
+2. Route53にインポート・検証
+3. TTL短縮（48時間前）
+4. レジストラでNSレコード変更
+5. 旧DNS並行稼働（TTL期間）
+6. 旧DNS停止・課金終了
+```
+
+**リスク軽減**:
+- テスト用サブドメインで先行実施
+- ロールバック手順の準備
+- 24/7サポート体制
+
+---
+
+## 55. DNSとサービスメッシュ連携
+
+### KubernetesサービスディスカバリとDNS
+- ExternalDNSでの自動レコード登録
+- Istio/App Mesh内部DNS
+- サービスメッシュ外部DNSとの統合
+- マルチクラスタDNS
+
+**ExternalDNS設定例**:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: api.example.com
+spec:
+  type: LoadBalancer
+  # ...
+```
+
+**自動化フロー**:
+```
+K8s Service作成
+  ↓
+ExternalDNS検知
+  ↓
+Route53に自動レコード追加
+  ↓
+Service削除時は自動削除
+```
+
+---
+
+## 56. DNS障害時の手動フォールバック
+
+### 緊急時の手動DNS設定
+- /etc/hostsファイルでの一時対応
+- ブラウザDNSキャッシュクリア
+- ISP DNSキャッシュ問題の回避
+- 代替DNSリゾルバへの切替
+
+**緊急対応手順**:
+```bash
+# 1. 一時的なhosts設定（管理者権限）
+echo "192.0.2.1 www.example.com" | sudo tee -a /etc/hosts
+
+# 2. DNSキャッシュクリア
+# macOS
+sudo dscacheutil -flushcache
+
+# Linux (systemd)
+sudo systemd-resolve --flush-caches
+
+# Windows
+ipconfig /flushdns
+```
+
+**組織での準備**:
+- 緊急連絡先リスト
+- 代替アクセス手順の文書化
+- VPN経由の内部DNSアクセス
+
+---
+
+## 57. DNSカオスエンジニアリング
+
+### DNS障害耐性テスト
+- NSサーバーの意図的停止テスト
+- DNSレイテンシ注入
+- ランダムNXDOMAIN応答
+- フェイルオーバー動作検証
+
+**テスト例**:
+```
+シナリオ1: プライマリNS停止
+→ 他NSで正常応答するか？
+
+シナリオ2: DNS応答遅延（5秒）
+→ アプリケーションタイムアウト設定は適切か？
+
+シナリオ3: 特定レコードのみNXDOMAIN
+→ アプリケーションのエラーハンドリングは？
+```
+
+**ツール**:
+- AWS Fault Injection Simulator
+- Chaos Mesh (Kubernetes)
+- カスタムスクリプト
+
+---
+
+## 58. マルチクラウドDNS統合
+
+### AWS + GCP + Azure統合DNS
+- NS1/Cloudflare等のマルチクラウドDNS
+- グローバルロードバランシング
+- クラウド障害時の自動フェイルオーバー
+- 各クラウドのPrivate DNSとの連携
+
+**構成例**:
+```
+グローバルDNS (NS1/Cloudflare)
+├── AWS Route53 (us-east-1)
+├── GCP Cloud DNS (us-central1)
+└── Azure DNS (eastus)
+   ↓ヘルスチェックで自動振り分け
+```
+
+**利点**:
+- 単一障害点の排除
+- 最適なクラウドへのルーティング
+- コスト最適化（リージョン選択）
+
+---
+
+## 59. DNS Private Hosted Zone連携
+
+### VPC間のPrivate DNS解決
+- VPCピアリング/Transit Gateway環境
+- クロスアカウントPrivate Zone関連付け
+- オンプレミスとのハイブリッドDNS
+- Resolver Endpointの活用
+
+**構成パターン**:
+```
+Central DNS Account
+└── Private Hosted Zone (internal.example.com)
+    ├── VPC Association → Account A
+    ├── VPC Association → Account B
+    └── Resolver Endpoint → オンプレミス
+```
+
+**Route53 Resolver設定**:
+- Inbound Endpoint: オンプレ→AWS
+- Outbound Endpoint: AWS→オンプレ
+- Resolver Rule: 条件付き転送
+
+---
+
+## 60. DNS予約容量とクォータ管理
+
+### AWS制限値の理解と拡張
+- ホストゾーン数上限（デフォルト500）
+- レコード数上限（1万/zone）
+- クエリレート制限
+- API呼び出しレート
+
+**主要クォータ**:
+| 項目 | デフォルト上限 | 拡張可否 |
+|------|---------------|---------|
+| ホストゾーン数 | 500 | ✅ 申請可 |
+| レコード数/zone | 10,000 | ✅ 申請可 |
+| ヘルスチェック数 | 200 | ✅ 申請可 |
+| トラフィックポリシー | 50 | ✅ 申請可 |
+
+**クォータ拡張申請**:
+```bash
+# Service Quotas経由で申請
+aws service-quotas request-service-quota-increase \
+  --service-code route53 \
+  --quota-code L-xxxxxxxx \
+  --desired-value 1000
+```
+
+**大規模運用Tips**:
+- ゾーン設計の最適化（サブドメイン委任活用）
+- レコード数監視とアラート
+- API呼び出しのバッチ処理
+
+---
+
+## 追加：Level 6 運用成熟度（超上級）
+
+### Level 6: DevOps/SRE完全自動化
+- [ ] 完全IaC管理（全DNS変更がGit経由）
+- [ ] カオスエンジニアリング定期実施
+- [ ] マルチクラウドDNSフェイルオーバー自動化
+- [ ] AIを活用した異常検知・自動対処
+- [ ] ゼロタッチDNS運用（セルフヒーリング）
+
+---
+
+## 最終チェックリスト：60項目完全版
+
+### 基礎編（1-10）
+- [ ] メール認証（SPF/DKIM/DMARC）
+- [ ] CNAME制約理解
+- [ ] TTL戦略
+- [ ] MX優先度
+- [ ] CAA設定
+- [ ] NSレコード管理
+- [ ] ワイルドカード活用
+- [ ] IPv6対応
+- [ ] TXT長さ制限
+- [ ] プロパゲーション理解
+
+### 中級編（11-30）
+- [ ] サブドメイン委任
+- [ ] SRV/PTR/SOA管理
+- [ ] DNSSEC
+- [ ] GeoDNS/Latency-based
+- [ ] ヘルスチェック/フェイルオーバー
+- [ ] クエリログ/監査
+- [ ] DDoS対策
+- [ ] ハイブリッドDNS
+- [ ] Zone Apex最適化
+- [ ] ラウンドロビン
+- [ ] DoH/DoT
+- [ ] DDNS
+- [ ] セカンダリDNS
+- [ ] 冗長性確認
+- [ ] TTLとRTO
+- [ ] テスト環境
+- [ ] Zone Transfer
+- [ ] Split-Horizon
+- [ ] キャッシュポイズニング対策
+- [ ] RPZ
+
+### 上級編（31-50）
+- [ ] トラフィックポリシー
+- [ ] Weighted/Latency ルーティング
+- [ ] Alias vs CNAME使い分け
+- [ ] フェイルオーバーテスト
+- [ ] リゾルバ最適化
+- [ ] 監視・アラート
+- [ ] 移行戦略
+- [ ] IaC管理
+- [ ] マルチアカウント管理
+- [ ] API/SDK活用
+- [ ] ACM統合
+- [ ] CI/CD統合
+- [ ] Blue/Green デプロイ
+- [ ] カナリアデプロイ
+- [ ] レコードバージョン管理
+- [ ] ゾーンファイル管理
+- [ ] クエリ分析
+- [ ] コスト最適化
+- [ ] DR計画
+- [ ] コンプライアンス
+
+### 超上級編（51-60）
+- [ ] レガシー移行
+- [ ] サービスメッシュ連携
+- [ ] 手動フォールバック準備
+- [ ] カオスエンジニアリング
+- [ ] マルチクラウド統合
+- [ ] Private Zone連携
+- [ ] クォータ管理
+- [ ] 完全自動化運用
+- [ ] AIベース異常検知
+- [ ] セルフヒーリングDNS
+
+---
+
+**🎉 全60項目の包括的DNSマスターガイド完成！**
