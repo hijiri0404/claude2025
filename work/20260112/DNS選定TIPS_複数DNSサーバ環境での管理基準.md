@@ -4,7 +4,7 @@
 
 ---
 
-## 📋 DNSサーバ選定 70のTIPS
+## 📋 DNSサーバ選定 80のTIPS
 
 ### 1. ウェブサイトとメールのドメイン統合
 **ウェブサイトとメールで同一ドメインを使用する場合は、ALIASレコード対応のAWS Route53を選択する**
@@ -286,6 +286,46 @@ DNS-over-QUIC（DoQ、RFC 9250）は、HTTP/3の基盤技術であるQUICを使�
 **ゼロトラストセキュリティモデルを実装する場合は、DNS Firewall+条件付きアクセス可能なRoute53 Resolverを選択する**
 ゼロトラストでは「誰も信用しない」前提で、すべてのアクセスを検証します。Route53 Resolver DNS Firewallでドメインベースのアクセス制御を実施し、IAMポリシーでDNS変更権限を最小化することで、ゼロトラストの一環としてDNSレイヤーのセキュリティを強化できます。
 
+### 71. DNS64/NAT64とIPv6移行
+**IPv6-onlyネットワークからIPv4リソースへアクセスする場合は、DNS64対応のRoute53 ResolverまたはAzure DNSを選択する**
+IPv6単一スタック環境では、DNS64がAAAAレコードを合成し、NAT64と連携してIPv4サーバーへの通信を可能にします。モバイルキャリアネットワークやクラウドネイティブ環境でのIPv6移行に不可欠な技術で、Route53 ResolverとAzure DNSが対応しています。
+
+### 72. DNS-based Service Discovery（DNS-SD）
+**ネットワーク上のサービスを自動発見したい場合は、PTRレコードとSRVレコード対応のRoute53またはAzure DNSを選択する**
+DNS-SD（RFC 6763）は、プリンター、ファイルサーバー、API エンドポイントなどをDNSで自動発見する仕組みです。_http._tcp.example.com のようなサービス名でPTR/SRVレコードをクエリし、利用可能なサービスとその接続情報を取得できます。
+
+### 73. Split-Horizon DNS（ビュー分割）
+**内部ユーザーと外部ユーザーで異なるDNS応答を返したい場合は、Public/Private Hosted Zone分離可能なRoute53を選択する**
+Split-Horizon DNSは、同一ドメイン名でもネットワーク位置により異なるIPアドレスを返す構成です。外部ユーザーには公開Webサーバー（Public Hosted Zone）、社内ユーザーには内部サーバー（Private Hosted Zone）を返すことで、セキュリティと利便性を両立します。
+
+### 74. DNS Sinkhole（ブラックホール）
+**マルウェアC&Cサーバーへの通信をDNSレベルでブロックしたい場合は、DNS Firewall対応のRoute53 Resolverを選択する**
+DNS Sinkholeは、既知の悪意あるドメインを127.0.0.1や専用サーバーへ解決させ、マルウェア通信を遮断する技術です。Route53 Resolver DNS Firewallで、AWS Managed Threat IntelligenceやサードパーティのIOC（侵害指標）フィードを活用し、社内ネットワークを保護します。
+
+### 75. DNS RPZ（Response Policy Zones）
+**カスタムDNSブロックリストを実装したい場合は、RPZ対応のオンプレミスDNS（BIND）またはRoute53 Resolver DNS Firewallを選択する**
+RPZ（RFC 5001）は、DNSブラックリストをゾーンファイル形式で管理し、柔軟なフィルタリングが可能です。金融機関や教育機関で広く採用され、フィッシングサイト、著作権侵害サイトなどをカスタムリストで遮断できます。BINDのRPZ機能またはRoute53 DNS Firewallのドメインリストで実装します。
+
+### 76. DNS負荷テストとキャパシティプランニング
+**DNSインフラの性能限界を把握したい場合は、無制限クエリ対応のRoute53を選択する**
+新サービスリリース前に、DNSの性能限界（QPS、同時接続数）を負荷テストで検証します。オンプレミスDNSでは事前のキャパシティプランニングが必要ですが、Route53は実質無制限のクエリ処理が可能で、負荷テストで制約を受けません。dnsperf、flamethrowerなどのツールで検証できます。
+
+### 77. DNS輸送プロトコルの最適化（TCP/UDP）
+**大きなDNS応答やEDNS0を効率的に処理したい場合は、自動TCP Fallback対応のRoute53を選択する**
+DNS over UDP は512バイト制限があり、大きな応答はTCPにフォールバックします。EDNS0（RFC 6891）は上限を引き上げますが、すべてのリゾルバが対応しているわけではありません。Route53は自動的に最適なプロトコルを選択し、クライアントの能力に応じた応答を返します。
+
+### 78. DNSベースのメール認証統合（BIMI）
+**ブランドロゴをメールクライアントに表示したい場合は、BIMI対応のTXTレコード登録可能なRoute53またはAzure DNSを選択する**
+BIMI（Brand Indicators for Message Identification）は、DMARCに加えてブランドロゴの情報をDNSに公開し、Gmail等のメールクライアントで送信者ロゴを表示させる仕組みです。フィッシング対策とブランド認知向上に貢献し、default._bimi.example.com のTXTレコードで設定します。
+
+### 79. DNS変更の自動承認ワークフロー
+**DNS変更に承認プロセスを組み込みたい場合は、API連携とサービス統合可能なRoute53を選択する**
+企業ガバナンスとして、DNS変更は申請・承認・実行のワークフローが必要な場合があります。Route53のAPIをServiceNow、Jira、PagerDutyなどと連携させ、変更申請→上長承認→自動実行の流れを構築できます。Terraformのplan/applyでも同様のレビュープロセスが実装可能です。
+
+### 80. DNS可観測性とOpenTelemetry統合
+**DNSメトリクスを統合可観測性プラットフォームで管理したい場合は、CloudWatch統合のRoute53を選択する**
+Route53のメトリクスをDatadog、New Relic、Grafanaなどの可観測性プラットフォームに統合し、アプリケーション・インフラ・DNSの統合ビューを構築できます。CloudWatch MetricsをOpenTelemetryでエクスポートし、ゴールデンシグナル（レイテンシ、トラフィック、エラー、飽和度）として監視します。
+
 ---
 
 ## 🎯 クイック判定フローチャート
@@ -361,4 +401,4 @@ IaC/API管理必要？
 
 **作成日**: 2026-01-12
 **更新日**: 2026-01-12
-**バージョン**: 6.0 (70 TIPS版)
+**バージョン**: 7.0 (80 TIPS版)
