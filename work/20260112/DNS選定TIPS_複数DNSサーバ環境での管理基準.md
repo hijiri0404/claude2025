@@ -4,7 +4,7 @@
 
 ---
 
-## 📋 DNSサーバ選定 80のTIPS
+## 📋 DNSサーバ選定 90のTIPS
 
 ### 1. ウェブサイトとメールのドメイン統合
 **ウェブサイトとメールで同一ドメインを使用する場合は、ALIASレコード対応のAWS Route53を選択する**
@@ -326,6 +326,46 @@ BIMI（Brand Indicators for Message Identification）は、DMARCに加えてブ�
 **DNSメトリクスを統合可観測性プラットフォームで管理したい場合は、CloudWatch統合のRoute53を選択する**
 Route53のメトリクスをDatadog、New Relic、Grafanaなどの可観測性プラットフォームに統合し、アプリケーション・インフラ・DNSの統合ビューを構築できます。CloudWatch MetricsをOpenTelemetryでエクスポートし、ゴールデンシグナル（レイテンシ、トラフィック、エラー、飽和度）として監視します。
 
+### 81. DNS Anycast Withdrawalと障害時の自動切り離し
+**障害時にDNSサーバーを自動的にエニーキャストから切り離したい場合は、ヘルスチェック連動のRoute53を選択する**
+エニーキャスト環境では、障害ノードが応答し続けると全体のサービス品質が低下します。Route53はヘルスチェック失敗時に自動的にBGP経路をWithdrawし、トラフィックを正常なノードへ誘導します。オンプレミスDNSでも実装可能ですが、手動設定が複雑です。
+
+### 82. DNS-based DDoS Mitigation（DNS水準でのDDoS緩和）
+**DDoS攻撃をDNSレベルで緩和したい場合は、AWS Shield Advanced統合のRoute53を選択する**
+大規模DDoS攻撃では、DNSクエリ自体が攻撃ベクトルになります。Route53 + AWS Shield Advancedにより、異常なクエリパターン（Random Subdomain Attack、NXDOMAIN Flood等）を自動検出・吸収します。攻撃中もサービスの可用性を維持し、$3,000/月の追加コストでDDoS対策専門チームのサポートも受けられます。
+
+### 83. DNS Application Firewall（DNS WAF）
+**DNSクエリにアプリケーションレベルのファイアウォールを適用したい場合は、DNS Firewall対応のRoute53 Resolverを選択する**
+DNS WAFは、通常のファイアウォールではカバーできないDNSプロトコルレベルの脅威を防ぎます。SQLインジェクション風のドメイン名、異常に長いラベル、不正な文字コードなど、DNSプロトコルの脆弱性を突く攻撃をフィルタリングし、権威DNSサーバーを保護します。
+
+### 84. DNS Hot Standby構成とアクティブ・アクティブ運用
+**複数DNSサーバーで同時にトラフィックを処理したい場合は、エニーキャスト＋ロードバランシングのRoute53を選択する**
+Hot Standby（アクティブ・アクティブ）構成では、すべてのDNSサーバーが同時にクエリを処理し、負荷分散と冗長性を両立します。Route53はグローバルにアクティブ・アクティブ配置され、単一障害点がありません。オンプレミスでは複雑なBGP/エニーキャスト設定が必要です。
+
+### 85. DNS Chaos TXT Record（version.bind）の無効化
+**DNSサーバー情報の漏洩を防ぎたい場合は、バージョン情報非公開のRoute53を選択する**
+version.bind（Chaos TXTレコード）は、DNSサーバーのソフトウェアバージョンを返すクエリで、攻撃者に既知の脆弱性情報を与えます。BINDではバージョン非公開設定が必要ですが、Route53は標準でバージョン情報を返さず、セキュリティリスクを低減します。
+
+### 86. DNS統計情報とレポーティング
+**経営層向けDNS利用統計レポートが必要な場合は、QuickSight連携可能なRoute53を選択する**
+月次・四半期のIT運用レポートで、DNSクエリ数、トップドメイン、地理的分布、可用性などの統計が求められる場合があります。Route53のクエリログをS3へエクスポートし、Amazon QuickSightやTableauでBIダッシュボードを作成することで、経営層への可視化と報告が容易になります。
+
+### 87. DNS Emergency Response（緊急時対応手順）
+**DNS障害時の緊急対応手順を標準化したい場合は、Runbook統合可能なRoute53を選択する**
+DNS障害は全サービス停止に直結するため、緊急対応手順（Runbook）の整備が重要です。Route53はCloudWatch Alarms + Systems Manager Automationで、障害検知→自動診断→エスカレーション→復旧手順実行の自動化が可能です。PagerDuty、Opsgenie統合で24/7オンコール体制を構築できます。
+
+### 88. DNS Record Set Limits（レコード数上限管理）
+**レコード数が段階的に増加する環境では、実質無制限のRoute53またはAzure DNSを選択する**
+お名前.comは500レコード、一部DNSサービスは1,000〜3,000レコードの上限があります。SaaS、マルチテナント、マイクロサービス環境ではレコード数が急増するため、実質無制限（10,000+）のRoute53やAzure DNSが必須です。上限到達による突然のサービス追加不可を防ぎます。
+
+### 89. DNS暗号化トンネリング対策
+**DNSを悪用した暗号化トンネリング（DNS-over-HTTPS悪用）を検知したい場合は、GuardDuty連携のRoute53を選択する**
+攻撃者はDoHを悪用してファイアウォールを回避し、データを外部送信します。Amazon GuardDutyはRoute53のクエリパターンを機械学習で分析し、通常と異なるトラフィック（高頻度クエリ、異常なペイロードサイズ等）を検出します。SOCチームへのアラート統合で迅速な対応が可能です。
+
+### 90. DNS as Infrastructure Automation Trigger
+**DNS変更をトリガーにインフラ自動化を実行したい場合は、EventBridge統合のRoute53を選択する**
+Route53のレコード変更をEventBridge経由でキャッチし、Lambda、Step Functions、CodePipelineを自動実行できます。例：新しいサブドメイン追加→自動的にSSL証明書発行→CloudFrontディストリビューション作成、といった完全自動化ワークフローが構築できます。
+
 ---
 
 ## 🎯 クイック判定フローチャート
@@ -401,4 +441,4 @@ IaC/API管理必要？
 
 **作成日**: 2026-01-12
 **更新日**: 2026-01-12
-**バージョン**: 7.0 (80 TIPS版)
+**バージョン**: 8.0 (90 TIPS版)
