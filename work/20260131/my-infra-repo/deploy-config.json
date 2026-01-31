@@ -1,0 +1,10 @@
+{
+  "stackName": "pipeline-test-stack",
+  "environment": "dev",
+  "allowedStackNames": [
+    "pipeline-test-stack",
+    "pipeline-dev-stack",
+    "pipeline-staging-stack",
+    "pipeline-prod-stack"
+  ]
+}

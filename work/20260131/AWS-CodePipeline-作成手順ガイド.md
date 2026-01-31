@@ -17,11 +17,160 @@ CodeCommit → CodePipeline → CodeBuild → CloudFormation/CDK Deploy
   トリガー       パイプライン     検証・合成      スタック作成
 ```
 
+### パターン別の構成
+
+| パターン | リポジトリ | パイプライン | 用途 |
+|---------|-----------|-------------|------|
+| CloudFormation | `cfn-repo` | `cfn-pipeline` | CloudFormationテンプレートのデプロイ |
+| CDK | `cdk-repo` | `cdk-pipeline` | CDKプロジェクトのデプロイ |
+| Terraform | `terraform-repo` | `terraform-pipeline` | Terraformのデプロイ |
+
 ## 前提条件
 
 - AWS CLI設定済み（認証情報・リージョン）
 - Git インストール済み
 - 使用するIaCツール（CDK CLI / SAM CLI / Terraform）インストール済み
+
+---
+
+## 設定ファイル方式（スタック名の可変管理）
+
+### 概要
+
+スタック名をハードコードせず、設定ファイルで管理することで以下のメリットがあります：
+
+- **タイプミス防止**: PRレビューで設定ファイルをチェック可能
+- **許可リスト**: 事前定義されたスタック名のみ許可
+- **環境分離**: dev/staging/prod を設定ファイルで切り替え
+- **履歴管理**: Git で変更履歴を追跡
+
+### 構成ファイル
+
+```
+my-repo/
+├── deploy-config.json   ← スタック名・環境設定
+├── buildspec.yml        ← 設定を読み込んでデプロイ
+├── template.yaml        ← CloudFormationテンプレート（CFn用）
+└── lib/                 ← CDKスタック（CDK用）
+```
+
+### deploy-config.json
+
+```json
+{
+  "stackName": "my-app-dev-stack",
+  "environment": "dev",
+  "allowedStackNames": [
+    "my-app-dev-stack",
+    "my-app-staging-stack",
+    "my-app-prod-stack"
+  ]
+}
+```
+
+| フィールド | 説明 |
+|-----------|------|
+| `stackName` | デプロイするスタック名 |
+| `environment` | 環境識別子（タグ付けに使用） |
+| `allowedStackNames` | 許可されたスタック名のリスト（タイプミス防止） |
+
+### buildspec.yml（CloudFormation用・設定ファイル対応版）
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - yum install -y jq || apt-get install -y jq || true
+
+  pre_build:
+    commands:
+      - echo "=== Reading deploy-config.json ==="
+      - |
+        if [ ! -f "deploy-config.json" ]; then
+          echo "❌ ERROR: deploy-config.json not found"
+          exit 1
+        fi
+      - export STACK_NAME=$(jq -r '.stackName' deploy-config.json)
+      - export ENVIRONMENT=$(jq -r '.environment' deploy-config.json)
+      - echo "Stack Name: $STACK_NAME"
+      - echo "Environment: $ENVIRONMENT"
+
+      # バリデーション: スタック名の形式チェック
+      - |
+        if [[ ! "$STACK_NAME" =~ ^[a-zA-Z][a-zA-Z0-9-]*$ ]]; then
+          echo "❌ ERROR: Invalid stack name format: $STACK_NAME"
+          exit 1
+        fi
+        echo "✅ Stack name format validation passed"
+
+      # バリデーション: 許可リストとの照合
+      - |
+        ALLOWED=$(jq -r '.allowedStackNames[]' deploy-config.json 2>/dev/null)
+        if [ -n "$ALLOWED" ]; then
+          if ! echo "$ALLOWED" | grep -qx "$STACK_NAME"; then
+            echo "❌ ERROR: Stack name '$STACK_NAME' is not in allowed list"
+            exit 1
+          fi
+          echo "✅ Stack name allowlist validation passed"
+        fi
+
+  build:
+    commands:
+      - echo "=== Deploying CloudFormation stack: $STACK_NAME ==="
+      - |
+        aws cloudformation deploy \
+          --template-file template.yaml \
+          --stack-name $STACK_NAME \
+          --no-fail-on-empty-changeset \
+          --tags Environment=$ENVIRONMENT CreatedBy=CodePipeline
+
+  post_build:
+    commands:
+      - aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs' --output table
+```
+
+### buildspec.yml（CDK用・設定ファイル対応版）
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm install
+
+  pre_build:
+    commands:
+      - |
+        if [ ! -f "deploy-config.json" ]; then
+          echo "❌ ERROR: deploy-config.json not found"
+          exit 1
+        fi
+      - export STACK_NAME=$(cat deploy-config.json | node -pe "JSON.parse(require('fs').readFileSync('/dev/stdin').toString()).stackName")
+      - export ENVIRONMENT=$(cat deploy-config.json | node -pe "JSON.parse(require('fs').readFileSync('/dev/stdin').toString()).environment")
+
+      # バリデーション
+      - |
+        if [[ ! "$STACK_NAME" =~ ^[a-zA-Z][a-zA-Z0-9-]*$ ]]; then
+          echo "❌ ERROR: Invalid stack name format"
+          exit 1
+        fi
+
+  build:
+    commands:
+      - npx cdk bootstrap --require-approval never 2>/dev/null || true
+      - npx cdk deploy $STACK_NAME --require-approval never -c stackName=$STACK_NAME -c environment=$ENVIRONMENT
+
+  post_build:
+    commands:
+      - aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs' --output table
+```
 
 ---
 
@@ -73,11 +222,13 @@ CodeCommit → CodePipeline → CodeBuild → CloudFormation/CDK Deploy
 1. **CodePipelineコンソール** → 「パイプラインを作成する」
 
 2. **パイプラインの設定**
-   | 項目 | 値 |
-   |------|-----|
-   | パイプライン名 | `my-infra-pipeline` |
-   | パイプラインタイプ | `V2` |
-   | サービスロール | `新しいサービスロール` |
+   | 項目 | 値 | 備考 |
+   |------|-----|------|
+   | パイプライン名 | `my-infra-pipeline` | |
+   | 実行モード | `キュー` | デフォルト。他に「超過」「並列」あり |
+   | サービスロール | `新しいサービスロール` | |
+
+   > **注**: パイプラインタイプ（V1/V2）は自動的にV2が選択されます
 
 3. **ソースステージ**
    | 項目 | 値 |
@@ -85,7 +236,7 @@ CodeCommit → CodePipeline → CodeBuild → CloudFormation/CDK Deploy
    | ソースプロバイダ | `AWS CodeCommit` |
    | リポジトリ名 | `my-infra-repo` |
    | ブランチ名 | `main` |
-   | 検出オプション | `Amazon CloudWatch Events` |
+   | ソースの変更を自動的に検出するEventBridgeルールを作成 | ✅ 有効 |
 
 4. **ビルドステージ**
    | 項目 | 値 |
@@ -94,30 +245,34 @@ CodeCommit → CodePipeline → CodeBuild → CloudFormation/CDK Deploy
    | リージョン | 現在のリージョン |
    | プロジェクト名 | `my-infra-build` |
 
-5. **デプロイステージ**（CloudFormation直接デプロイの場合）
-   | 項目 | 値 |
-   |------|-----|
-   | デプロイプロバイダ | `AWS CloudFormation` |
-   | アクションモード | `スタックを作成または更新する` |
-   | スタック名 | `my-app-stack` |
-   | テンプレート | `BuildArtifact::template.yaml` |
-   | ロール名 | CloudFormation用IAMロール |
+5. **デプロイステージ**
+
+   **推奨: スキップする（CodeBuild内でデプロイ）**
+   - 「デプロイステージをスキップ」を選択
+   - buildspec.yml内で`aws cloudformation deploy`または`cdk deploy`を実行
+
+   > **注意**: CloudFormationアクションを使用する場合、セッションポリシーの制限でエラーになることがあります。CodeBuild内でデプロイする方が安定します。
 
 6. 「確認して作成」
 
 ### Step 4: IAMロール権限追加
 
-CodeBuildサービスロールに以下を追加:
+CodeBuildサービスロールに以下を追加（IAMコンソール → ロール → 該当ロール → ポリシーを追加）:
 
 ```json
 {
-  "Effect": "Allow",
-  "Action": [
-    "cloudformation:*",
-    "iam:PassRole",
-    "s3:*"
-  ],
-  "Resource": "*"
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:*",
+        "s3:*",
+        "iam:*"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -125,38 +280,24 @@ CodeBuildサービスロールに以下を追加:
 
 ## ② AWS CLIでの作成
 
-### Step 1: CodeCommitリポジトリ作成
+### Step 1: 変数設定
 
 ```bash
-# リポジトリ作成
-aws codecommit create-repository \
-  --repository-name my-infra-repo \
-  --repository-description "Infrastructure repository"
-
-# クローンURL取得
-aws codecommit get-repository \
-  --repository-name my-infra-repo \
-  --query 'repositoryMetadata.cloneUrlHttp' \
-  --output text
+# 共通変数
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export REGION=$(aws configure get region)
+export REPO_NAME="my-infra-repo"
+export BUILD_PROJECT="my-infra-build"
+export PIPELINE_NAME="my-infra-pipeline"
+export ARTIFACT_BUCKET="codepipeline-${REGION}-${ACCOUNT_ID}"
 ```
 
-### Step 2: S3アーティファクトバケット作成
+### Step 2: CodeCommitリポジトリ作成
 
 ```bash
-# 変数設定
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-BUCKET_NAME="codepipeline-artifacts-${ACCOUNT_ID}-${REGION}"
-
-# バケット作成
-aws s3 mb s3://${BUCKET_NAME}
-
-# 暗号化有効化
-aws s3api put-bucket-encryption \
-  --bucket ${BUCKET_NAME} \
-  --server-side-encryption-configuration '{
-    "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
-  }'
+aws codecommit create-repository \
+  --repository-name $REPO_NAME \
+  --repository-description "Infrastructure repository"
 ```
 
 ### Step 3: IAMロール作成
@@ -164,289 +305,194 @@ aws s3api put-bucket-encryption \
 #### CodeBuild用ロール
 
 ```bash
-# 信頼ポリシー作成
-cat > codebuild-trust-policy.json << 'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
+# 信頼ポリシー
+aws iam create-role \
+  --role-name codebuild-${BUILD_PROJECT}-service-role \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
       "Effect": "Allow",
       "Principal": {"Service": "codebuild.amazonaws.com"},
       "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
+    }]
+  }'
 
-# ロール作成
-aws iam create-role \
-  --role-name CodeBuildServiceRole \
-  --assume-role-policy-document file://codebuild-trust-policy.json
-```
-
-#### CodeBuild用ポリシー
-
-```bash
-cat > codebuild-policy.json << EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::${BUCKET_NAME}/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "codecommit:GitPull"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "cloudformation:*",
-        "iam:PassRole"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-EOF
-
+# 権限ポリシー
 aws iam put-role-policy \
-  --role-name CodeBuildServiceRole \
+  --role-name codebuild-${BUILD_PROJECT}-service-role \
   --policy-name CodeBuildPolicy \
-  --policy-document file://codebuild-policy.json
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["logs:*"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["s3:*"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["codecommit:GitPull"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["cloudformation:*", "iam:*"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["sts:AssumeRole"],
+        "Resource": "arn:aws:iam::*:role/cdk-*"
+      }
+    ]
+  }'
 ```
 
 #### CodePipeline用ロール
 
 ```bash
-# 信頼ポリシー作成
-cat > codepipeline-trust-policy.json << 'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
+aws iam create-role \
+  --role-name AWSCodePipelineServiceRole-${PIPELINE_NAME} \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
       "Effect": "Allow",
       "Principal": {"Service": "codepipeline.amazonaws.com"},
       "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-
-# ロール作成
-aws iam create-role \
-  --role-name CodePipelineServiceRole \
-  --assume-role-policy-document file://codepipeline-trust-policy.json
-```
-
-#### CodePipeline用ポリシー
-
-```bash
-cat > codepipeline-policy.json << EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": "arn:aws:s3:::${BUCKET_NAME}/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "codecommit:GetBranch",
-        "codecommit:GetCommit",
-        "codecommit:UploadArchive",
-        "codecommit:GetUploadArchiveStatus",
-        "codecommit:CancelUploadArchive"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["codebuild:BatchGetBuilds", "codebuild:StartBuild"],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["cloudformation:*"],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["iam:PassRole"],
-      "Resource": "*"
-    }
-  ]
-}
-EOF
+    }]
+  }'
 
 aws iam put-role-policy \
-  --role-name CodePipelineServiceRole \
+  --role-name AWSCodePipelineServiceRole-${PIPELINE_NAME} \
   --policy-name CodePipelinePolicy \
-  --policy-document file://codepipeline-policy.json
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["codecommit:*"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["codebuild:*"],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["s3:*"],
+        "Resource": "*"
+      }
+    ]
+  }'
 ```
 
 ### Step 4: CodeBuildプロジェクト作成
 
 ```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-
-cat > codebuild-project.json << EOF
-{
-  "name": "my-infra-build",
-  "source": {
-    "type": "CODECOMMIT",
-    "location": "https://git-codecommit.${REGION}.amazonaws.com/v1/repos/my-infra-repo"
-  },
-  "artifacts": {
-    "type": "S3",
-    "location": "${BUCKET_NAME}",
-    "packaging": "ZIP"
-  },
-  "environment": {
-    "type": "LINUX_CONTAINER",
-    "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
-    "computeType": "BUILD_GENERAL1_SMALL"
-  },
-  "serviceRole": "arn:aws:iam::${ACCOUNT_ID}:role/CodeBuildServiceRole"
-}
-EOF
-
-aws codebuild create-project --cli-input-json file://codebuild-project.json
+aws codebuild create-project \
+  --name $BUILD_PROJECT \
+  --source type=CODECOMMIT,location=https://git-codecommit.${REGION}.amazonaws.com/v1/repos/${REPO_NAME} \
+  --environment type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0 \
+  --service-role arn:aws:iam::${ACCOUNT_ID}:role/codebuild-${BUILD_PROJECT}-service-role \
+  --artifacts type=NO_ARTIFACTS
 ```
 
 ### Step 5: CodePipeline作成
 
 ```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-
-cat > pipeline.json << EOF
-{
-  "pipeline": {
-    "name": "my-infra-pipeline",
-    "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/CodePipelineServiceRole",
-    "artifactStore": {
-      "type": "S3",
-      "location": "${BUCKET_NAME}"
+aws codepipeline create-pipeline --pipeline '{
+  "name": "'$PIPELINE_NAME'",
+  "roleArn": "arn:aws:iam::'$ACCOUNT_ID':role/AWSCodePipelineServiceRole-'$PIPELINE_NAME'",
+  "artifactStore": {
+    "type": "S3",
+    "location": "'$ARTIFACT_BUCKET'"
+  },
+  "stages": [
+    {
+      "name": "Source",
+      "actions": [{
+        "name": "SourceAction",
+        "actionTypeId": {
+          "category": "Source",
+          "owner": "AWS",
+          "provider": "CodeCommit",
+          "version": "1"
+        },
+        "configuration": {
+          "RepositoryName": "'$REPO_NAME'",
+          "BranchName": "main",
+          "PollForSourceChanges": "false"
+        },
+        "outputArtifacts": [{"name": "SourceOutput"}]
+      }]
     },
-    "stages": [
-      {
-        "name": "Source",
-        "actions": [
-          {
-            "name": "SourceAction",
-            "actionTypeId": {
-              "category": "Source",
-              "owner": "AWS",
-              "provider": "CodeCommit",
-              "version": "1"
-            },
-            "configuration": {
-              "RepositoryName": "my-infra-repo",
-              "BranchName": "main",
-              "PollForSourceChanges": "false"
-            },
-            "outputArtifacts": [{"name": "SourceOutput"}]
-          }
-        ]
-      },
-      {
-        "name": "Build",
-        "actions": [
-          {
-            "name": "BuildAction",
-            "actionTypeId": {
-              "category": "Build",
-              "owner": "AWS",
-              "provider": "CodeBuild",
-              "version": "1"
-            },
-            "configuration": {
-              "ProjectName": "my-infra-build"
-            },
-            "inputArtifacts": [{"name": "SourceOutput"}],
-            "outputArtifacts": [{"name": "BuildOutput"}]
-          }
-        ]
-      },
-      {
-        "name": "Deploy",
-        "actions": [
-          {
-            "name": "DeployAction",
-            "actionTypeId": {
-              "category": "Deploy",
-              "owner": "AWS",
-              "provider": "CloudFormation",
-              "version": "1"
-            },
-            "configuration": {
-              "ActionMode": "CREATE_UPDATE",
-              "StackName": "my-app-stack",
-              "TemplatePath": "BuildOutput::template.yaml",
-              "Capabilities": "CAPABILITY_IAM,CAPABILITY_NAMED_IAM",
-              "RoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/CloudFormationServiceRole"
-            },
-            "inputArtifacts": [{"name": "BuildOutput"}]
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-
-aws codepipeline create-pipeline --cli-input-json file://pipeline.json
+    {
+      "name": "Build",
+      "actions": [{
+        "name": "BuildAction",
+        "actionTypeId": {
+          "category": "Build",
+          "owner": "AWS",
+          "provider": "CodeBuild",
+          "version": "1"
+        },
+        "configuration": {
+          "ProjectName": "'$BUILD_PROJECT'"
+        },
+        "inputArtifacts": [{"name": "SourceOutput"}]
+      }]
+    }
+  ]
+}'
 ```
 
-### Step 6: EventBridgeルール作成（自動トリガー）
+### Step 6: リポジトリにファイルをプッシュ
 
 ```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-
-# CodeCommit変更検知ルール
-cat > event-rule.json << EOF
+# 設定ファイル作成
+cat > deploy-config.json << 'EOF'
 {
-  "source": ["aws.codecommit"],
-  "detail-type": ["CodeCommit Repository State Change"],
-  "resources": ["arn:aws:codecommit:${REGION}:${ACCOUNT_ID}:my-infra-repo"],
-  "detail": {
-    "event": ["referenceCreated", "referenceUpdated"],
-    "referenceType": ["branch"],
-    "referenceName": ["main"]
-  }
+  "stackName": "my-app-stack",
+  "environment": "dev",
+  "allowedStackNames": ["my-app-stack", "my-app-dev-stack", "my-app-prod-stack"]
 }
 EOF
 
-aws events put-rule \
-  --name "codecommit-my-infra-repo-main" \
-  --event-pattern file://event-rule.json
+# CloudFormationテンプレート作成
+cat > template.yaml << 'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sample S3 bucket
+Resources:
+  SampleBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'sample-bucket-${AWS::AccountId}'
+Outputs:
+  BucketName:
+    Value: !Ref SampleBucket
+EOF
 
-# ターゲット設定（CodePipeline起動）
-aws events put-targets \
-  --rule "codecommit-my-infra-repo-main" \
-  --targets "Id"="1","Arn"="arn:aws:codepipeline:${REGION}:${ACCOUNT_ID}:my-infra-pipeline","RoleArn"="arn:aws:iam::${ACCOUNT_ID}:role/EventBridgeCodePipelineRole"
+# buildspec.yml作成（上記の設定ファイル対応版を使用）
+
+# AWS CLIでCodeCommitにプッシュ
+BUILDSPEC=$(cat buildspec.yml | base64 -w0)
+DEPLOY_CONFIG=$(cat deploy-config.json | base64 -w0)
+TEMPLATE=$(cat template.yaml | base64 -w0)
+
+aws codecommit create-commit \
+  --repository-name $REPO_NAME \
+  --branch-name main \
+  --commit-message "Initial commit" \
+  --put-files \
+    "filePath=buildspec.yml,fileContent=$BUILDSPEC" \
+    "filePath=deploy-config.json,fileContent=$DEPLOY_CONFIG" \
+    "filePath=template.yaml,fileContent=$TEMPLATE"
 ```
 
 ---
@@ -461,7 +507,7 @@ cdk init app --language typescript
 npm install
 ```
 
-### Step 2: パイプラインスタック作成（基本版）
+### Step 2: パイプラインスタック作成
 
 ```typescript
 // lib/pipeline-stack.ts
@@ -473,54 +519,33 @@ import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
 import * as codepipeline_actions from 'aws-cdk-lib/aws-codepipeline-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
+interface PipelineStackProps extends cdk.StackProps {
+  repositoryName: string;
+  pipelineName: string;
+  buildProjectName: string;
+}
+
 export class PipelineStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: PipelineStackProps) {
     super(scope, id, props);
 
-    // ===========================================
-    // 1. CodeCommitリポジトリ
-    // ===========================================
-    const repository = new codecommit.Repository(this, 'InfraRepo', {
-      repositoryName: 'my-infra-repo',
+    // CodeCommitリポジトリ
+    const repository = new codecommit.Repository(this, 'Repository', {
+      repositoryName: props.repositoryName,
       description: 'Infrastructure as Code repository',
     });
 
-    // ===========================================
-    // 2. CodeBuildプロジェクト
-    // ===========================================
+    // CodeBuildプロジェクト
     const buildProject = new codebuild.PipelineProject(this, 'BuildProject', {
-      projectName: 'my-infra-build',
+      projectName: props.buildProjectName,
       environment: {
         buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
         computeType: codebuild.ComputeType.SMALL,
       },
-      buildSpec: codebuild.BuildSpec.fromObject({
-        version: '0.2',
-        phases: {
-          install: {
-            'runtime-versions': {
-              nodejs: '20',
-            },
-            commands: [
-              'npm install -g aws-cdk',
-              'npm ci',
-            ],
-          },
-          pre_build: {
-            commands: [
-              'cdk synth',
-            ],
-          },
-          build: {
-            commands: [
-              'cdk deploy --require-approval never --all',
-            ],
-          },
-        },
-      }),
+      // buildspec.ymlはリポジトリから読み込み
     });
 
-    // CodeBuildに必要な権限を付与
+    // CodeBuildに必要な権限
     buildProject.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -533,17 +558,13 @@ export class PipelineStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // ===========================================
-    // 3. CodePipelineパイプライン
-    // ===========================================
+    // パイプライン
     const sourceOutput = new codepipeline.Artifact('SourceOutput');
-    const buildOutput = new codepipeline.Artifact('BuildOutput');
 
-    const pipeline = new codepipeline.Pipeline(this, 'Pipeline', {
-      pipelineName: 'my-infra-pipeline',
+    new codepipeline.Pipeline(this, 'Pipeline', {
+      pipelineName: props.pipelineName,
       pipelineType: codepipeline.PipelineType.V2,
       stages: [
-        // ソースステージ
         {
           stageName: 'Source',
           actions: [
@@ -556,135 +577,28 @@ export class PipelineStack extends cdk.Stack {
             }),
           ],
         },
-        // ビルドステージ
         {
           stageName: 'Build',
           actions: [
             new codepipeline_actions.CodeBuildAction({
-              actionName: 'CDK_Build',
+              actionName: 'Build_Deploy',
               project: buildProject,
               input: sourceOutput,
-              outputs: [buildOutput],
             }),
           ],
         },
       ],
     });
 
-    // ===========================================
     // 出力
-    // ===========================================
     new cdk.CfnOutput(this, 'RepositoryCloneUrl', {
       value: repository.repositoryCloneUrlHttp,
-      description: 'CodeCommit repository clone URL',
-    });
-
-    new cdk.CfnOutput(this, 'PipelineArn', {
-      value: pipeline.pipelineArn,
-      description: 'CodePipeline ARN',
     });
   }
 }
 ```
 
-### Step 3: CDK Pipelines（自己更新型）を使う場合（推奨）
-
-```typescript
-// lib/pipeline-stack.ts（CDK Pipelines版）
-import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import * as codecommit from 'aws-cdk-lib/aws-codecommit';
-import { CodePipeline, CodePipelineSource, ShellStep } from 'aws-cdk-lib/pipelines';
-
-// ===========================================
-// デプロイ対象のアプリケーションスタック
-// ===========================================
-class MyApplicationStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
-    // ここにデプロイしたいリソースを定義
-    // 例: S3バケット、Lambda、API Gatewayなど
-  }
-}
-
-// ===========================================
-// アプリケーションステージ
-// ===========================================
-class MyApplicationStage extends cdk.Stage {
-  constructor(scope: Construct, id: string, props?: cdk.StageProps) {
-    super(scope, id, props);
-    new MyApplicationStack(this, 'AppStack');
-  }
-}
-
-// ===========================================
-// パイプラインスタック
-// ===========================================
-export class PipelineStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
-
-    // CodeCommitリポジトリ（既存参照 or 新規作成）
-    // 既存リポジトリを参照する場合:
-    const repository = codecommit.Repository.fromRepositoryName(
-      this, 'Repo', 'my-infra-repo'
-    );
-
-    // 新規作成の場合:
-    // const repository = new codecommit.Repository(this, 'Repo', {
-    //   repositoryName: 'my-infra-repo',
-    // });
-
-    // ===========================================
-    // CDK Pipelines - 自己更新型パイプライン
-    // ===========================================
-    const pipeline = new CodePipeline(this, 'Pipeline', {
-      pipelineName: 'MyAppPipeline',
-
-      // Synthステップ（ビルド・合成）
-      synth: new ShellStep('Synth', {
-        input: CodePipelineSource.codeCommit(repository, 'main'),
-        commands: [
-          'npm ci',
-          'npm run build',
-          'npx cdk synth',
-        ],
-      }),
-
-      // Docker使用時
-      dockerEnabledForSynth: true,
-    });
-
-    // ===========================================
-    // 開発環境ステージ
-    // ===========================================
-    pipeline.addStage(new MyApplicationStage(this, 'Dev', {
-      env: {
-        account: process.env.CDK_DEFAULT_ACCOUNT,
-        region: 'ap-northeast-1'
-      },
-    }));
-
-    // ===========================================
-    // 本番環境ステージ（手動承認付き）
-    // ===========================================
-    pipeline.addStage(new MyApplicationStage(this, 'Prod', {
-      env: {
-        account: process.env.CDK_DEFAULT_ACCOUNT,
-        region: 'ap-northeast-1'
-      },
-    }), {
-      pre: [
-        new cdk.pipelines.ManualApprovalStep('PromoteToProd', {
-          comment: '本番環境へのデプロイを承認してください',
-        }),
-      ],
-    });
-  }
-}
-```
-
-### Step 4: エントリポイント設定
+### Step 3: エントリポイント
 
 ```typescript
 // bin/pipeline-cdk.ts
@@ -695,34 +609,44 @@ import { PipelineStack } from '../lib/pipeline-stack';
 
 const app = new cdk.App();
 
-new PipelineStack(app, 'PipelineStack', {
+// CloudFormation用パイプライン
+new PipelineStack(app, 'CfnPipelineStack', {
+  repositoryName: 'cfn-repo',
+  pipelineName: 'cfn-pipeline',
+  buildProjectName: 'cfn-build',
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION || 'ap-northeast-1',
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+});
+
+// CDK用パイプライン
+new PipelineStack(app, 'CdkPipelineStack', {
+  repositoryName: 'cdk-repo',
+  pipelineName: 'cdk-pipeline',
+  buildProjectName: 'cdk-build',
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
   },
 });
 ```
 
-### Step 5: デプロイ
+### Step 4: デプロイ
 
 ```bash
 # CDK Bootstrap（初回のみ）
 cdk bootstrap
 
-# パイプラインデプロイ（初回のみ手動実行）
-cdk deploy PipelineStack
-
-# 以降はCodeCommitへのpushで自動実行
-git add .
-git commit -m "Initial pipeline setup"
-git push origin main
+# パイプラインデプロイ
+cdk deploy --all
 ```
 
 ---
 
-## buildspec.yml サンプル
+## buildspec.yml サンプル集
 
-### CDK用
+### CloudFormation用（設定ファイル対応）
 
 ```yaml
 version: 0.2
@@ -732,44 +656,45 @@ phases:
     runtime-versions:
       nodejs: 20
     commands:
-      - npm install -g aws-cdk
-      - npm ci
+      - yum install -y jq
 
   pre_build:
     commands:
-      - cdk synth
+      - export STACK_NAME=$(jq -r '.stackName' deploy-config.json)
+      - |
+        if [[ ! "$STACK_NAME" =~ ^[a-zA-Z][a-zA-Z0-9-]*$ ]]; then
+          echo "❌ Invalid stack name"; exit 1
+        fi
 
   build:
     commands:
-      - cdk deploy --require-approval never --all
-
-cache:
-  paths:
-    - node_modules/**/*
+      - aws cloudformation deploy --template-file template.yaml --stack-name $STACK_NAME --no-fail-on-empty-changeset
 ```
 
-### CloudFormation用
+### CDK用（設定ファイル対応）
 
 ```yaml
 version: 0.2
 
 phases:
   install:
+    runtime-versions:
+      nodejs: 20
     commands:
-      - pip install cfn-lint
+      - npm install
 
   pre_build:
     commands:
-      - cfn-lint templates/*.yaml
+      - export STACK_NAME=$(node -pe "require('./deploy-config.json').stackName")
 
   build:
     commands:
-      - echo "CloudFormation template validated"
+      - npx cdk bootstrap 2>/dev/null || true
+      - npx cdk deploy $STACK_NAME --require-approval never
 
-artifacts:
-  files:
-    - templates/**/*
-    - parameters/**/*
+cache:
+  paths:
+    - node_modules/**/*
 ```
 
 ### Terraform用
@@ -807,28 +732,156 @@ phases:
 | **自動化** | × | ○ | ◎ |
 | **複雑な構成** | △ | ○ | ◎ |
 | **チーム開発** | × | ○ | ◎ |
-| **自己更新** | × | × | ◎（CDK Pipelines） |
 | **推奨用途** | 学習・検証 | 自動化スクリプト | 本番環境 |
 
 ---
 
-## 留意事項
+## トラブルシューティング
 
-### IAM権限
+### よくあるエラーと対処
 
-CodeBuildサービスロールに必要な主要権限:
+| エラー | 原因 | 対処 |
+|--------|------|------|
+| `AccessDenied` | IAM権限不足 | CodeBuildロールに必要な権限追加 |
+| `session policy allows` | CloudFormationアクションの制限 | Deployステージを削除し、CodeBuild内でデプロイ |
+| `Bootstrap required` | CDK環境未準備 | `cdk bootstrap`実行 |
+| `Stack is in ROLLBACK_COMPLETE` | 前回失敗 | 手動でスタック削除後再実行 |
+| `deploy-config.json not found` | 設定ファイルなし | リポジトリにdeploy-config.json追加 |
 
-| 権限 | 用途 |
-|------|------|
-| `cloudformation:*` | スタック操作 |
-| `s3:*` | アーティファクト管理 |
-| `iam:PassRole` | CloudFormation用ロール付与 |
-| `codecommit:GitPull` | ソースコード取得 |
-| `logs:*` | ログ出力 |
-| `ssm:GetParameter` | CDK Bootstrap情報（CDK使用時） |
-| `sts:AssumeRole` | クロスアカウント（CDK使用時） |
+### Deployステージのセッションポリシーエラー
 
-### セキュリティベストプラクティス
+CodePipelineのDeployステージでCloudFormationアクションを使用した際に以下のエラーが発生する場合：
+
+```
+User: arn:aws:sts::ACCOUNT_ID:assumed-role/AWSCodePipelineServiceRole-.../...
+is not authorized to perform: s3:ListBucket on resource: "arn:aws:s3:::codepipeline-REGION-..."
+because no session policy allows the s3:ListBucket action
+```
+
+**原因**:
+1. CodePipelineのCloudFormationアクションは、内部的にロールをAssumeRoleする際に**セッションポリシー**を付与する
+2. このセッションポリシーには、アーティファクトS3バケットへのアクセス権限が含まれていない場合がある
+3. **IAMロール自体に権限があっても、セッションポリシーで制限されるため拒否される**
+4. これはCodePipelineの内部動作に起因するため、ユーザー側での直接的な制御が難しい
+
+**対策1（推奨）**: Deployステージを削除し、CodeBuild内で直接デプロイを実行する
+
+```yaml
+# buildspec.yml
+build:
+  commands:
+    - aws cloudformation deploy --template-file template.yaml --stack-name my-stack --no-fail-on-empty-changeset
+```
+
+この方法のメリット：
+- セッションポリシーの問題を回避できる
+- CodeBuildロールの権限のみで動作するためシンプル
+- 実務でも広く採用されているパターン
+
+**対策2**: CloudFormation用の専用デプロイロールを作成して明示的に指定
+
+```bash
+# CloudFormation用デプロイロールを作成
+aws iam create-role \
+  --role-name CloudFormationDeployRole \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {"Service": "cloudformation.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+
+# 必要な権限を付与
+aws iam attach-role-policy \
+  --role-name CloudFormationDeployRole \
+  --policy-arn arn:aws:iam::aws:policy/PowerUserAccess
+```
+
+パイプラインのDeployアクションで`RoleArn`を指定：
+
+```json
+{
+  "configuration": {
+    "ActionMode": "CREATE_UPDATE",
+    "StackName": "my-stack",
+    "TemplatePath": "BuildOutput::template.yaml",
+    "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/CloudFormationDeployRole",
+    "Capabilities": "CAPABILITY_IAM,CAPABILITY_NAMED_IAM"
+  }
+}
+```
+
+**補足**: CloudFormationアクションを使用する方法は正式にサポートされており、変更セットのプレビューや手動承認などの高度な機能が利用できます。ただし、権限設定が複雑になるため、シンプルに動作させたい場合は対策1を推奨します。
+
+### buildspec.yml YAML構文エラー（YAML_FILE_ERROR）
+
+CodeBuildで以下のようなエラーが出る場合：
+
+```
+YAML_FILE_ERROR: Expected Commands[0] to be of string type: found subkeys instead
+```
+
+**原因**: buildspec.ymlのYAML構文エラー。特に以下のパターンで発生しやすい：
+
+1. **コメントの位置が不適切**
+   ```yaml
+   # ❌ NG: リスト項目の間にコメント
+   commands:
+     - echo "step1"
+     # コメント
+     - echo "step2"
+   ```
+
+2. **マルチラインコマンドの書き方が不正**
+   ```yaml
+   # ❌ NG: 空行やインデントの問題
+   commands:
+     - |
+       if [ -f "file" ]; then
+         echo "found"
+       fi
+
+     # コメント
+     - |
+       next command
+   ```
+
+**解決策**: buildspec.ymlをシンプルに記述する
+
+```yaml
+# ✅ OK: シンプルな形式
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing jq"
+      - yum install -y jq || true
+
+  pre_build:
+    commands:
+      - echo "Reading config"
+      - export STACK_NAME=$(jq -r '.stackName' deploy-config.json)
+
+  build:
+    commands:
+      - echo "Deploying stack"
+      - aws cloudformation deploy --template-file template.yaml --stack-name $STACK_NAME --no-fail-on-empty-changeset
+```
+
+**ポイント**:
+- コメントはマルチラインブロック（`|`）の**中に**記述する
+- リスト項目（`-`）の間に空行を入れない
+- できるだけワンライナーで記述する
+- 複雑なロジックはシェルスクリプトファイルに分離する
+
+---
+
+## セキュリティベストプラクティス
 
 | 項目 | 推奨設定 |
 |------|---------|
@@ -837,15 +890,7 @@ CodeBuildサービスロールに必要な主要権限:
 | 静的解析 | cfn-lint, cdk-nag, Checkovを組み込み |
 | シークレット | Secrets Manager / Parameter Store使用 |
 | 暗号化 | S3アーティファクトバケットのSSE-KMS |
-
-### トラブルシューティング
-
-| 問題 | 原因 | 対処 |
-|------|------|------|
-| `AccessDenied` | IAM権限不足 | CodeBuildロールに必要な権限追加 |
-| `CAPABILITY_IAM required` | IAMリソース作成 | Capabilities設定に追加 |
-| `Stack is in ROLLBACK_COMPLETE` | 前回失敗 | 手動でスタック削除後再実行 |
-| `Bootstrap required` | CDK環境未準備 | `cdk bootstrap`実行 |
+| 最小権限 | 必要最小限のIAM権限のみ付与 |
 
 ---
 

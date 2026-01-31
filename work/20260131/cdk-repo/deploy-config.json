@@ -1,0 +1,10 @@
+{
+  "stackName": "CdkPipelineTestStack",
+  "environment": "dev",
+  "allowedStackNames": [
+    "CdkPipelineTestStack",
+    "CdkDevStack",
+    "CdkStagingStack",
+    "CdkProdStack"
+  ]
+}

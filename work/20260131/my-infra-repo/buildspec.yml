@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing jq"
+      - yum install -y jq || true
+
+  pre_build:
+    commands:
+      - echo "Reading deploy-config.json"
+      - cat deploy-config.json
+      - export STACK_NAME=$(jq -r '.stackName' deploy-config.json)
+      - export ENVIRONMENT=$(jq -r '.environment' deploy-config.json)
+      - echo "Stack Name is $STACK_NAME"
+      - echo "Environment is $ENVIRONMENT"
+
+  build:
+    commands:
+      - echo "Deploying CloudFormation stack $STACK_NAME"
+      - aws cloudformation deploy --template-file template.yaml --stack-name $STACK_NAME --no-fail-on-empty-changeset --tags Environment=$ENVIRONMENT CreatedBy=CodePipeline
+
+  post_build:
+    commands:
+      - echo "Deployment completed"
+      - aws cloudformation describe-stacks --stack-name $STACK_NAME --query Stacks[0].Outputs --output table || echo "No outputs"

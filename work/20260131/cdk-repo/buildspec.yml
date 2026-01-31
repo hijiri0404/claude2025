@@ -1,0 +1,53 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "=== Installing dependencies ==="
+      - npm install
+
+  pre_build:
+    commands:
+      - echo "=== Reading deploy-config.json ==="
+      - |
+        if [ ! -f "deploy-config.json" ]; then
+          echo "❌ ERROR: deploy-config.json not found"
+          exit 1
+        fi
+      - export STACK_NAME=$(cat deploy-config.json | node -pe "JSON.parse(require('fs').readFileSync('/dev/stdin').toString()).stackName")
+      - export ENVIRONMENT=$(cat deploy-config.json | node -pe "JSON.parse(require('fs').readFileSync('/dev/stdin').toString()).environment")
+      - echo "Stack Name: $STACK_NAME"
+      - echo "Environment: $ENVIRONMENT"
+      
+      # バリデーション: スタック名の形式チェック
+      - |
+        if [[ ! "$STACK_NAME" =~ ^[a-zA-Z][a-zA-Z0-9-]*$ ]]; then
+          echo "❌ ERROR: Invalid stack name format: $STACK_NAME"
+          exit 1
+        fi
+        echo "✅ Stack name format validation passed"
+      
+      # バリデーション: 許可リストとの照合
+      - |
+        ALLOWED=$(cat deploy-config.json | node -pe "JSON.parse(require('fs').readFileSync('/dev/stdin').toString()).allowedStackNames.join('\n')")
+        if [ -n "$ALLOWED" ]; then
+          if ! echo "$ALLOWED" | grep -qx "$STACK_NAME"; then
+            echo "❌ ERROR: Stack name '$STACK_NAME' is not in allowed list"
+            exit 1
+          fi
+          echo "✅ Stack name allowlist validation passed"
+        fi
+
+  build:
+    commands:
+      - echo "=== CDK Bootstrap (if needed) ==="
+      - npx cdk bootstrap --require-approval never 2>/dev/null || true
+      - echo "=== CDK Deploy: $STACK_NAME ==="
+      - npx cdk deploy $STACK_NAME --require-approval never -c stackName=$STACK_NAME -c environment=$ENVIRONMENT
+
+  post_build:
+    commands:
+      - echo "=== Deployment completed ==="
+      - aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs' --output table 2>/dev/null || echo "Stack outputs not available"
