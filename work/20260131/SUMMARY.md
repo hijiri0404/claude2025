@@ -25,6 +25,27 @@
   - `lib/pipeline-stack.ts` - パイプラインスタック定義
   - `bin/cdk-pipeline-test.ts` - エントリポイント
 
+### 推奨構成サンプル (recommended-structure/)
+
+```
+recommended-structure/
+└── system-a-infra/
+    ├── README.md                    # 使用方法
+    ├── buildspec.yml               # マルチスタック対応buildspec
+    ├── environments/               # 環境別設定
+    │   ├── dev.json
+    │   ├── stg.json
+    │   └── prod.json
+    ├── stacks/                     # CloudFormationテンプレート
+    │   ├── 01-network.yaml        # VPC, Subnet, IGW
+    │   ├── 02-security.yaml       # IAM Role, Security Group
+    │   ├── 03-storage.yaml        # S3, DynamoDB
+    │   ├── 04-compute.yaml        # Lambda, API Gateway
+    │   └── 05-monitoring.yaml     # CloudWatch Alarm, Dashboard
+    └── scripts/
+        └── create-pipeline.sh     # 環境別パイプライン作成スクリプト
+```
+
 ## 完了したタスク
 
 ### パイプライン作成
@@ -48,6 +69,18 @@
 ### トラブルシューティング
 - [x] buildspec.yml YAML構文エラーの調査と解決
 - [x] MDファイルへのトラブルシューティング情報追記
+
+### マルチシステム・マルチ環境構成
+- [x] 推奨構成のディレクトリ構造作成
+- [x] 5つのCloudFormationスタック作成（network/security/storage/compute/monitoring）
+- [x] 環境別設定ファイル作成（dev.json/stg.json/prod.json）
+- [x] マルチスタック対応buildspec.yml作成
+- [x] 環境別パイプライン作成スクリプト作成
+
+### ドキュメント整備
+- [x] AWS-CodePipeline-作成手順ガイド.mdの全面リファクタリング
+- [x] クイックスタートセクションの追加
+- [x] 推奨構成セクションの追加
 
 ## AWS作成リソース
 
@@ -99,6 +132,13 @@
 - 環境ごとの設定切り替え
 - Git履歴による変更追跡
 - PRレビューでの確認が可能
+
+### マルチ環境構成のポイント
+- 環境変数`ENVIRONMENT`でbuildspec.ymlの動作を切り替え
+- 環境設定は`environments/*.json`で管理
+- スタックは番号付きで依存順序を明確化（01-network → 02-security → ...）
+- Cross-Stack参照（`Fn::ImportValue`）でスタック間を疎結合に
+- 環境ごとにCIDR範囲やリソースサイズを変更可能
 
 ## 手順書検証結果
 
