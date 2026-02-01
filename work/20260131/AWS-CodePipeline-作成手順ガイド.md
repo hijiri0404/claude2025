@@ -185,11 +185,18 @@ Outputs:                                # 作成後の出力
 
 ### 1. リポジトリ準備
 
+> **初学者向け: このステップで何をする？**
+> ローカルPCに作業フォルダを作り、パイプラインに必要な2つのファイルを作成します。
+
 ```bash
 # 作業ディレクトリ作成
 mkdir my-infra && cd my-infra
+# ↑ 「my-infra」というフォルダを作って、その中に移動
+```
 
-# 必要ファイル作成
+#### template.yaml（CloudFormationテンプレート）の作成
+
+```bash
 cat > template.yaml << 'EOF'
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Sample S3 bucket
@@ -200,7 +207,16 @@ Outputs:
   BucketName:
     Value: !Ref SampleBucket
 EOF
+```
 
+> **初学者向け: このファイルは何？**
+> 「S3バケットを1個作ってください」というAWSへの指示書です。
+> - `Resources`: 作りたいもの（S3バケット）
+> - `Outputs`: 作成後に表示したい情報（バケット名）
+
+#### buildspec.yml（ビルド手順書）の作成
+
+```bash
 cat > buildspec.yml << 'EOF'
 version: 0.2
 phases:
@@ -211,33 +227,89 @@ phases:
     commands:
       - aws cloudformation deploy --template-file template.yaml --stack-name my-sample-stack --no-fail-on-empty-changeset
 EOF
+```
 
-# Git初期化
+> **初学者向け: このファイルは何？**
+> CodeBuildに「何をするか」を教える手順書です。
+> - `phases`: 実行するフェーズ（段階）
+> - `build.commands`: 実際に実行するコマンド
+> - `aws cloudformation deploy`: テンプレートを使ってリソースを作成
+
+#### Gitリポジトリの初期化
+
+```bash
 git init && git add . && git commit -m "Initial commit"
+# ↑ 3つのコマンドを連続実行:
+#   git init: このフォルダをGitリポジトリにする
+#   git add .: 全ファイルをステージング（コミット対象に追加）
+#   git commit: 変更を記録
 ```
 
 ### 2. CodeCommitにプッシュ
 
-```bash
-# リポジトリ作成
-aws codecommit create-repository --repository-name my-infra
+> **初学者向け: このステップで何をする？**
+> ローカルPCで作ったファイルを、AWSのCodeCommit（クラウド上のGitリポジトリ）にアップロードします。
 
-# プッシュ
-git remote add origin https://git-codecommit.ap-northeast-1.amazonaws.com/v1/repos/my-infra
-git push -u origin main
+```bash
+# CodeCommitにリポジトリを作成
+aws codecommit create-repository --repository-name my-infra
+# ↑ AWS上に「my-infra」という名前のGitリポジトリを新規作成
 ```
+
+```bash
+# ローカルリポジトリとCodeCommitを紐付け
+git remote add origin https://git-codecommit.ap-northeast-1.amazonaws.com/v1/repos/my-infra
+# ↑ 「origin」という名前でCodeCommitのURLを登録
+
+# コードをアップロード
+git push -u origin main
+# ↑ mainブランチをCodeCommitにプッシュ（アップロード）
+```
+
+> **初学者向け: 認証エラーが出たら？**
+> AWS CLIの認証設定が必要です。以下を確認してください:
+> ```bash
+> aws configure  # アクセスキー等を設定
+> git config --global credential.helper '!aws codecommit credential-helper $@'
+> git config --global credential.UseHttpPath true
+> ```
 
 ### 3. パイプライン作成（マネジメントコンソール）
 
-1. CodePipelineコンソール → 「パイプラインを作成」
-2. ソース: CodeCommit → `my-infra` → `main`
-3. ビルド: CodeBuild → 新規プロジェクト作成（デフォルト設定）
-4. デプロイ: **スキップ**（buildspec.yml内でデプロイ）
-5. 作成後、CodeBuildロールに`AWSCloudFormationFullAccess`を追加
+> **初学者向け: このステップで何をする？**
+> AWSコンソール（Webブラウザ）でパイプラインを作成します。
+
+1. **CodePipelineコンソール**を開く
+   - URL: https://console.aws.amazon.com/codepipeline/
+   - 「パイプラインを作成」ボタンをクリック
+
+2. **ソースステージの設定**
+   - プロバイダ: `AWS CodeCommit`を選択
+   - リポジトリ名: `my-infra`を選択
+   - ブランチ名: `main`を選択
+
+3. **ビルドステージの設定**
+   - プロバイダ: `AWS CodeBuild`を選択
+   - 「プロジェクトを作成」をクリック
+   - プロジェクト名を入力（例: `my-infra-build`）
+   - その他はデフォルト設定でOK
+
+4. **デプロイステージ**: **スキップ**を選択
+   > なぜスキップ？ → buildspec.yml内でデプロイするため
+
+5. **パイプライン作成後**: CodeBuildロールに権限を追加
+   - IAMコンソールで`codebuild-xxx-service-role`を検索
+   - `AWSCloudFormationFullAccess`ポリシーをアタッチ
 
 ---
 
 ## アーキテクチャ概要
+
+> **初学者向け: パイプラインの流れ**
+>
+> パイプラインは「工場の生産ライン」のようなものです。
+> 材料（ソースコード）が投入されると、各工程（ステージ）を順番に通過して、
+> 最終的に製品（デプロイされたシステム）ができあがります。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -255,6 +327,18 @@ git push -u origin main
         └── ソースコード変更を検知（EventBridge）
 ```
 
+> **初学者向け: 各ステージの説明**
+>
+> | ステージ | 役割 | 例え |
+> |---------|------|------|
+> | **Source** | コードを取得 | 倉庫から材料を取り出す |
+> | **Build** | テスト・ビルド・デプロイ | 材料を加工して製品を作る |
+> | **Approval** | 人間が確認・承認 | 品質管理者がチェック |
+> | **Deploy** | 本番環境に反映 | 製品を店頭に並べる |
+>
+> **ポイント**: このガイドではBuildステージ内でデプロイまで行います。
+> （シンプルで初学者にも分かりやすいため）
+
 ### デプロイ方式の選択
 
 | 方式 | 説明 | 推奨用途 |
@@ -268,16 +352,52 @@ git push -u origin main
 
 ## 前提条件
 
-- AWS CLI設定済み（認証情報・リージョン）
-- Git インストール済み
-- （CDK使用時）Node.js 18以上、CDK CLI
+> **初学者向け: 始める前に必要なもの**
+
+### 必須要件
+
+| 要件 | 説明 | 確認方法 |
+|------|------|---------|
+| **AWSアカウント** | AWSを利用するためのアカウント | [AWS公式サイト](https://aws.amazon.com/)で作成 |
+| **IAMユーザー** | 管理者権限を持つユーザー | ルートアカウントではなくIAMユーザーを使用 |
+| **AWS CLI** | コマンドラインからAWSを操作するツール | `aws --version` |
+| **Git** | バージョン管理ツール | `git --version` |
+
+### AWS CLIのセットアップ（未設定の場合）
 
 ```bash
-# 確認コマンド
-aws sts get-caller-identity
-git --version
-node --version  # CDK使用時
+# 1. AWS CLIをインストール（macOS）
+brew install awscli
+
+# 2. 認証情報を設定
+aws configure
+# → Access Key ID: （IAMユーザーのアクセスキー）
+# → Secret Access Key: （IAMユーザーのシークレットキー）
+# → Default region: ap-northeast-1（東京リージョン）
+# → Default output format: json
 ```
+
+### 確認コマンド
+
+```bash
+# AWS CLIの確認（自分のアカウント情報が表示されればOK）
+aws sts get-caller-identity
+# 出力例: {"UserId": "xxx", "Account": "123456789012", "Arn": "arn:aws:iam::..."}
+
+# Gitの確認
+git --version
+# 出力例: git version 2.39.0
+
+# Node.jsの確認（CDK使用時のみ）
+node --version
+# 出力例: v20.10.0
+```
+
+> **初学者向け: アクセスキーの取得方法**
+> 1. AWSコンソールにログイン
+> 2. 右上のユーザー名 → 「セキュリティ認証情報」
+> 3. 「アクセスキーを作成」
+> 4. 表示されたキーを安全に保管（二度と表示されません）
 
 ---
 
@@ -348,43 +468,71 @@ CodeBuildサービスロールに以下のポリシーを追加:
 
 ### 一括実行スクリプト
 
+> **初学者向け: スクリプトの読み方**
+> 以下のスクリプトは長いですが、やっていることはGUIと同じです。
+> 各セクションに説明を入れているので、順番に読んでみてください。
+
 ```bash
 #!/bin/bash
+# ↑ このファイルをBashシェルで実行することを宣言
+
 set -e
+# ↑ エラーが発生したら即座にスクリプトを停止
+#   これがないと、エラーを無視して続行してしまう
 
 # === 変数設定 ===
+# ↓ 自分のAWSアカウントIDを取得して変数に保存
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-REPO_NAME="my-infra-repo"
-BUILD_PROJECT="my-infra-build"
-PIPELINE_NAME="my-infra-pipeline"
-ARTIFACT_BUCKET="codepipeline-${REGION}-${ACCOUNT_ID}"
 
+# ↓ AWS CLIに設定されているリージョンを取得
+REGION=$(aws configure get region)
+
+# ↓ 作成するリソースの名前を定義（好きな名前に変更可能）
+REPO_NAME="my-infra-repo"          # CodeCommitリポジトリ名
+BUILD_PROJECT="my-infra-build"      # CodeBuildプロジェクト名
+PIPELINE_NAME="my-infra-pipeline"   # パイプライン名
+ARTIFACT_BUCKET="codepipeline-${REGION}-${ACCOUNT_ID}"  # S3バケット名
+
+# 設定値を表示（デバッグ用）
 echo "Account: $ACCOUNT_ID, Region: $REGION"
 
 # === 1. CodeCommitリポジトリ作成 ===
+# ↓ AWS上にGitリポジトリを作成
+#   「2>/dev/null || echo ...」はエラーを無視して続行するおまじない
 aws codecommit create-repository --repository-name $REPO_NAME 2>/dev/null || echo "Repository already exists"
 
 # === 2. IAMロール作成 ===
-# CodeBuild用
+# ↓ CodeBuild用のIAMロールを作成
+#   IAMロール = サービスに付与する権限の入れ物
+#   assume-role-policy = 「誰がこのロールを使えるか」の設定
+#   ここでは「codebuild.amazonaws.com」= CodeBuildサービスが使える
+
 aws iam create-role \
   --role-name codebuild-${BUILD_PROJECT}-role \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}' 2>/dev/null || true
 
+# ↓ 作成したロールに権限（ポリシー）を追加
+#   AWSCloudFormationFullAccess: CloudFormationでリソースを作成する権限
+#   AmazonS3FullAccess: S3バケットを操作する権限
+#   CloudWatchLogsFullAccess: ログを出力する権限
+#   IAMFullAccess: IAMリソースを作成する権限（Lambda用ロール等）
 aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/AWSCloudFormationFullAccess 2>/dev/null || true
 aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess 2>/dev/null || true
 aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess 2>/dev/null || true
 aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/IAMFullAccess 2>/dev/null || true
 
-# CodePipeline用
+# ↓ CodePipeline用のIAMロールも同様に作成
 aws iam create-role \
   --role-name codepipeline-${PIPELINE_NAME}-role \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codepipeline.amazonaws.com"},"Action":"sts:AssumeRole"}]}' 2>/dev/null || true
 
+# ↓ パイプラインが他のサービスを操作するための権限
 aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AWSCodeCommitFullAccess 2>/dev/null || true
 aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess 2>/dev/null || true
 aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess 2>/dev/null || true
 
+# ↓ IAMロールがAWS全体に反映されるまで少し待つ
+#   作成直後はまだ使えないことがあるため
 echo "Waiting for IAM role propagation..."
 sleep 10
 
@@ -403,6 +551,8 @@ aws s3api create-bucket \
   --create-bucket-configuration LocationConstraint=$REGION 2>/dev/null || true
 
 # === 5. CodePipeline作成 ===
+# ↓ パイプラインの設定をJSONファイルとして作成
+#   JSONは設定を記述するためのデータ形式
 cat > /tmp/pipeline.json << EOF
 {
   "name": "${PIPELINE_NAME}",
@@ -432,6 +582,7 @@ cat > /tmp/pipeline.json << EOF
 }
 EOF
 
+# ↓ JSONファイルを使ってパイプラインを作成
 aws codepipeline create-pipeline --cli-input-json file:///tmp/pipeline.json 2>/dev/null || echo "Pipeline already exists"
 
 echo ""
@@ -439,6 +590,26 @@ echo "=== Pipeline created successfully ==="
 echo "Repository: https://git-codecommit.${REGION}.amazonaws.com/v1/repos/${REPO_NAME}"
 echo "Pipeline: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${PIPELINE_NAME}/view"
 ```
+
+> **初学者向け: パイプラインJSONの構造**
+>
+> ```
+> {
+>   "name": "パイプライン名",
+>   "roleArn": "パイプラインが使うIAMロール",
+>   "artifactStore": "一時ファイル保存先（S3）",
+>   "stages": [
+>     { "name": "Source",  ... },  ← 1つ目のステージ
+>     { "name": "Build",   ... }   ← 2つ目のステージ
+>   ]
+> }
+> ```
+>
+> **重要な用語**:
+> - `stages`: パイプラインの処理段階（Source→Build→Deployの流れ）
+> - `actions`: 各ステージで実行する具体的な処理
+> - `inputArtifacts`: 前のステージから受け取るファイル
+> - `outputArtifacts`: 次のステージに渡すファイル
 
 ---
 
@@ -462,81 +633,129 @@ echo "Pipeline: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/
 ### Step 1: プロジェクト初期化
 
 ```bash
+# CDKプロジェクト用のディレクトリを作成
 mkdir pipeline-cdk && cd pipeline-cdk
+
+# CDKプロジェクトを初期化（TypeScript版）
 cdk init app --language typescript
+# ↑ このコマンドで以下のファイルが自動生成される:
+#   - bin/          : エントリポイント（アプリの起動点）
+#   - lib/          : スタック定義（リソースの設計図）
+#   - package.json  : 依存パッケージの定義
+#   - cdk.json      : CDKの設定ファイル
+
+# 依存パッケージをインストール
 npm install
 ```
 
+> **初学者向け: CDKプロジェクトの構造**
+> ```
+> pipeline-cdk/
+> ├── bin/
+> │   └── pipeline-cdk.ts    ← アプリのエントリポイント
+> ├── lib/
+> │   └── pipeline-cdk-stack.ts  ← リソース定義（ここを編集）
+> ├── package.json           ← 依存パッケージ一覧
+> ├── tsconfig.json          ← TypeScript設定
+> └── cdk.json               ← CDK設定
+> ```
+
 ### Step 2: パイプラインスタック
+
+> **初学者向け: CDKコードの読み方**
+> CDKでは、AWSリソースを「クラス」として表現します。
+> `new codecommit.Repository(...)` は「新しいCodeCommitリポジトリを作る」という意味です。
 
 ```typescript
 // lib/pipeline-stack.ts
-import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import * as codecommit from 'aws-cdk-lib/aws-codecommit';
-import * as codebuild from 'aws-cdk-lib/aws-codebuild';
-import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
-import * as codepipeline_actions from 'aws-cdk-lib/aws-codepipeline-actions';
-import * as iam from 'aws-cdk-lib/aws-iam';
+// ↓ 必要なライブラリをインポート（読み込み）
+import * as cdk from 'aws-cdk-lib';                    // CDKの基本機能
+import { Construct } from 'constructs';                // リソースの親子関係を管理
+import * as codecommit from 'aws-cdk-lib/aws-codecommit';      // CodeCommit操作
+import * as codebuild from 'aws-cdk-lib/aws-codebuild';        // CodeBuild操作
+import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';  // パイプライン操作
+import * as codepipeline_actions from 'aws-cdk-lib/aws-codepipeline-actions'; // アクション
+import * as iam from 'aws-cdk-lib/aws-iam';                    // IAM権限操作
 
+// ↓ このスタックに渡すパラメータの型定義
+//   TypeScriptでは「どんなデータを受け取るか」を明示する
 interface PipelineStackProps extends cdk.StackProps {
-  repositoryName: string;
-  pipelineName: string;
+  repositoryName: string;   // リポジトリ名（文字列）
+  pipelineName: string;     // パイプライン名（文字列）
 }
 
+// ↓ スタック = AWSリソースのまとまり
+//   この1つのクラスで、リポジトリ・ビルド・パイプラインを全部作る
 export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PipelineStackProps) {
-    super(scope, id, props);
+    super(scope, id, props);  // 親クラスの初期化
 
-    // CodeCommitリポジトリ
+    // ========================================
+    // 1. CodeCommitリポジトリを作成
+    // ========================================
     const repository = new codecommit.Repository(this, 'Repository', {
-      repositoryName: props.repositoryName,
+      repositoryName: props.repositoryName,  // 引数で渡された名前を使用
     });
 
-    // CodeBuildプロジェクト
+    // ========================================
+    // 2. CodeBuildプロジェクトを作成
+    // ========================================
     const buildProject = new codebuild.PipelineProject(this, 'BuildProject', {
       environment: {
+        // ビルドに使用するDockerイメージ（Amazon Linux 2）
         buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
       },
     });
 
-    // 権限付与
+    // ========================================
+    // 3. CodeBuildに権限を付与
+    // ========================================
+    // ↓ CLIで「attach-role-policy」したのと同じことをコードで実現
     buildProject.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudformation:*', 'iam:*', 's3:*', 'sts:AssumeRole'],
-      resources: ['*'],
+      resources: ['*'],  // 全リソースに対して許可（本番では絞るべき）
     }));
 
-    // パイプライン
+    // ========================================
+    // 4. パイプラインを作成
+    // ========================================
+    // ↓ ステージ間でデータを受け渡すための「入れ物」
     const sourceOutput = new codepipeline.Artifact();
 
     new codepipeline.Pipeline(this, 'Pipeline', {
       pipelineName: props.pipelineName,
-      pipelineType: codepipeline.PipelineType.V2,
+      pipelineType: codepipeline.PipelineType.V2,  // 最新のV2タイプ
       stages: [
+        // --- Sourceステージ: コードを取得 ---
         {
           stageName: 'Source',
           actions: [
             new codepipeline_actions.CodeCommitSourceAction({
               actionName: 'Source',
-              repository,
-              branch: 'main',
-              output: sourceOutput,
+              repository,        // 上で作ったリポジトリを指定
+              branch: 'main',    // mainブランチを監視
+              output: sourceOutput,  // 取得したコードをこの変数に格納
             }),
           ],
         },
+        // --- Buildステージ: ビルド・デプロイ実行 ---
         {
           stageName: 'Build',
           actions: [
             new codepipeline_actions.CodeBuildAction({
               actionName: 'Build',
-              project: buildProject,
-              input: sourceOutput,
+              project: buildProject,  // 上で作ったビルドプロジェクト
+              input: sourceOutput,    // Sourceステージから受け取ったコード
             }),
           ],
         },
       ],
     });
 
+    // ========================================
+    // 5. 作成後に表示する情報
+    // ========================================
+    // ↓ デプロイ完了後にリポジトリURLをコンソールに表示
     new cdk.CfnOutput(this, 'RepositoryUrl', {
       value: repository.repositoryCloneUrlHttp,
     });
@@ -544,20 +763,35 @@ export class PipelineStack extends cdk.Stack {
 }
 ```
 
+> **初学者向け: CDKコードのまとめ**
+> 上記のコード約60行で、以下のAWSリソースが作成されます:
+> - CodeCommitリポジトリ
+> - CodeBuildプロジェクト（+IAMロール+権限）
+> - CodePipeline（Source→Buildの2ステージ）
+> - 必要なIAMポリシー
+>
+> CLIで同じことをすると100行以上のコマンドが必要です。
+
 ### Step 3: エントリポイント
+
+> **初学者向け**: このファイルが「アプリケーションの起動点」です。
+> `cdk deploy`を実行すると、このファイルが最初に読み込まれます。
 
 ```typescript
 // bin/pipeline-cdk.ts
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { PipelineStack } from '../lib/pipeline-stack';
+import { PipelineStack } from '../lib/pipeline-stack';  // 先ほど作ったスタック
 
+// CDKアプリケーションを作成
 const app = new cdk.App();
 
+// パイプラインスタックをインスタンス化（実際にAWSリソースを定義）
 new PipelineStack(app, 'MyPipelineStack', {
-  repositoryName: 'my-infra',
-  pipelineName: 'my-infra-pipeline',
+  repositoryName: 'my-infra',        // ← 好きな名前に変更可能
+  pipelineName: 'my-infra-pipeline', // ← 好きな名前に変更可能
   env: {
+    // 環境変数からアカウントIDとリージョンを取得
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
@@ -567,9 +801,28 @@ new PipelineStack(app, 'MyPipelineStack', {
 ### Step 4: デプロイ
 
 ```bash
-cdk bootstrap  # 初回のみ
+# 初回のみ: CDKを使うための準備（S3バケットやIAMロールを作成）
+cdk bootstrap
+# ↑ 「CDKがAWSにリソースを作る準備をする」コマンド
+#   アカウント・リージョンごとに1回だけ実行すればOK
+
+# スタックをデプロイ（AWSにリソースを作成）
 cdk deploy
+# ↑ このコマンドで実際にAWSリソースが作成される
+#   確認メッセージが表示されたら「y」を入力
 ```
+
+> **初学者向け: デプロイ後の確認**
+> ```bash
+> # 作成されたスタックを確認
+> cdk list
+>
+> # スタックの詳細を確認
+> aws cloudformation describe-stacks --stack-name MyPipelineStack
+>
+> # リソースを削除したい場合
+> cdk destroy
+> ```
 
 ---
 
