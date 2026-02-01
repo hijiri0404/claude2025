@@ -722,6 +722,386 @@ phases:
 
 ---
 
+## Deployステージを使用したデプロイ（手動承認対応）
+
+Deployステージを使用すると、変更セットのプレビューや手動承認フローが簡単に実装できます。
+
+### パイプライン構成例
+
+```
+Source → Build（検証・合成） → 手動承認 → Deploy（CloudFormation）
+```
+
+### CloudFormation用パイプライン（Deployステージ使用）
+
+#### ① IAMロールの作成
+
+```bash
+# CloudFormation実行用ロール
+aws iam create-role \
+  --role-name CloudFormationExecutionRole \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {"Service": "cloudformation.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+
+# 必要な権限を付与（本番では最小権限に絞る）
+aws iam attach-role-policy \
+  --role-name CloudFormationExecutionRole \
+  --policy-arn arn:aws:iam::aws:policy/PowerUserAccess
+```
+
+#### ② buildspec.yml（Buildステージ用・検証のみ）
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - pip install cfn-lint
+
+  pre_build:
+    commands:
+      - echo "Validating CloudFormation template"
+      - cfn-lint template.yaml
+      - aws cloudformation validate-template --template-body file://template.yaml
+
+  build:
+    commands:
+      - echo "Template validation passed"
+
+artifacts:
+  files:
+    - template.yaml
+    - deploy-config.json
+```
+
+#### ③ パイプライン定義（CLI）
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+aws codepipeline create-pipeline --pipeline '{
+  "name": "cfn-deploy-pipeline",
+  "roleArn": "arn:aws:iam::'$ACCOUNT_ID':role/CodePipelineServiceRole",
+  "artifactStore": {
+    "type": "S3",
+    "location": "your-artifact-bucket"
+  },
+  "stages": [
+    {
+      "name": "Source",
+      "actions": [{
+        "name": "Source",
+        "actionTypeId": {"category": "Source", "owner": "AWS", "provider": "CodeCommit", "version": "1"},
+        "configuration": {"RepositoryName": "my-repo", "BranchName": "main"},
+        "outputArtifacts": [{"name": "SourceOutput"}]
+      }]
+    },
+    {
+      "name": "Build",
+      "actions": [{
+        "name": "Validate",
+        "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
+        "configuration": {"ProjectName": "cfn-validate"},
+        "inputArtifacts": [{"name": "SourceOutput"}],
+        "outputArtifacts": [{"name": "BuildOutput"}]
+      }]
+    },
+    {
+      "name": "Approval",
+      "actions": [{
+        "name": "ManualApproval",
+        "actionTypeId": {"category": "Approval", "owner": "AWS", "provider": "Manual", "version": "1"},
+        "configuration": {
+          "CustomData": "Please review the CloudFormation changes before deploying to production"
+        }
+      }]
+    },
+    {
+      "name": "Deploy",
+      "actions": [{
+        "name": "DeployStack",
+        "actionTypeId": {"category": "Deploy", "owner": "AWS", "provider": "CloudFormation", "version": "1"},
+        "configuration": {
+          "ActionMode": "CREATE_UPDATE",
+          "StackName": "my-production-stack",
+          "TemplatePath": "BuildOutput::template.yaml",
+          "Capabilities": "CAPABILITY_IAM,CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND",
+          "RoleArn": "arn:aws:iam::'$ACCOUNT_ID':role/CloudFormationExecutionRole"
+        },
+        "inputArtifacts": [{"name": "BuildOutput"}]
+      }]
+    }
+  ]
+}'
+```
+
+### CDK用パイプライン（Deployステージ使用）
+
+CDKの場合は、Buildステージで`cdk synth`を実行してCloudFormationテンプレートを生成し、Deployステージでデプロイします。
+
+#### ① buildspec.yml（cdk synth用）
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm install
+
+  build:
+    commands:
+      - npx cdk synth
+
+artifacts:
+  base-directory: cdk.out
+  files:
+    - "*.template.json"
+```
+
+#### ② パイプラインのDeployステージ設定
+
+```json
+{
+  "name": "Deploy",
+  "actions": [{
+    "name": "DeployCDKStack",
+    "actionTypeId": {
+      "category": "Deploy",
+      "owner": "AWS",
+      "provider": "CloudFormation",
+      "version": "1"
+    },
+    "configuration": {
+      "ActionMode": "CREATE_UPDATE",
+      "StackName": "MyCdkStack",
+      "TemplatePath": "BuildOutput::MyCdkStack.template.json",
+      "Capabilities": "CAPABILITY_IAM,CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND",
+      "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/CloudFormationExecutionRole"
+    },
+    "inputArtifacts": [{"name": "BuildOutput"}]
+  }]
+}
+```
+
+### CDK Pipelines（推奨）
+
+CDKを使用する場合は、CDK Pipelinesを使うと手動承認を含むパイプラインが簡単に構築できます。
+
+```typescript
+import { CodePipeline, CodePipelineSource, ShellStep, ManualApprovalStep } from 'aws-cdk-lib/pipelines';
+
+const pipeline = new CodePipeline(this, 'Pipeline', {
+  pipelineName: 'MyCdkPipeline',
+  synth: new ShellStep('Synth', {
+    input: CodePipelineSource.codeCommit(repository, 'main'),
+    commands: ['npm ci', 'npm run build', 'npx cdk synth'],
+  }),
+});
+
+// 開発環境（自動デプロイ）
+pipeline.addStage(new MyAppStage(this, 'Dev'));
+
+// 本番環境（手動承認付き）
+pipeline.addStage(new MyAppStage(this, 'Prod'), {
+  pre: [
+    new ManualApprovalStep('PromoteToProd', {
+      comment: '本番環境へのデプロイを承認してください',
+    }),
+  ],
+});
+```
+
+### BuildステージとDeployステージの使い分け
+
+| 観点 | Buildでデプロイ | Deployステージ使用 |
+|------|----------------|-------------------|
+| **シンプルさ** | ◎ | △ |
+| **手動承認** | △ 別途Approvalステージ追加 | ◎ ネイティブ対応 |
+| **変更セットプレビュー** | × | ◎ CHANGE_SET_REPLACEモード |
+| **ロールバック** | △ 手動 | ◎ 自動 |
+| **推奨ケース** | 開発・検証環境 | 本番環境 |
+
+---
+
+## バージョン管理のベストプラクティス
+
+### リポジトリ構成
+
+パイプライン関連ファイルは**インフラコードと同じリポジトリ**で管理することを推奨します。
+
+```
+my-infra-repo/
+├── .gitignore
+├── README.md
+├── buildspec.yml              # CodeBuild設定
+├── deploy-config.json         # デプロイ設定（スタック名、環境）
+├── template.yaml              # CloudFormationテンプレート（CFn使用時）
+├── cdk.json                   # CDK設定（CDK使用時）
+├── package.json               # 依存関係（CDK使用時）
+├── tsconfig.json              # TypeScript設定（CDK使用時）
+├── bin/
+│   └── app.ts                 # CDKエントリポイント
+├── lib/
+│   └── my-stack.ts            # CDKスタック定義
+└── test/
+    └── my-stack.test.ts       # テスト
+```
+
+### .gitignore
+
+```gitignore
+# CDK
+cdk.out/
+node_modules/
+*.js
+*.d.ts
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# 機密情報
+.env
+*.pem
+credentials.json
+```
+
+### deploy-config.json の環境別管理
+
+#### 方法1: 環境別ファイル
+
+```
+my-infra-repo/
+├── deploy-config.dev.json
+├── deploy-config.staging.json
+├── deploy-config.prod.json
+└── buildspec.yml
+```
+
+```yaml
+# buildspec.yml - 環境変数で切り替え
+pre_build:
+  commands:
+    - cp deploy-config.${ENVIRONMENT}.json deploy-config.json
+```
+
+#### 方法2: ブランチ別管理
+
+```
+main branch      → 本番環境用 deploy-config.json
+develop branch   → 開発環境用 deploy-config.json
+```
+
+#### 方法3: 単一ファイルで複数環境管理
+
+```json
+{
+  "environments": {
+    "dev": {
+      "stackName": "my-app-dev",
+      "environment": "dev"
+    },
+    "prod": {
+      "stackName": "my-app-prod",
+      "environment": "prod"
+    }
+  }
+}
+```
+
+### パイプライン定義のバージョン管理
+
+パイプライン自体もコードで管理することを推奨します。
+
+#### 方法1: AWS CDKでパイプラインを定義（推奨）
+
+```
+pipeline-repo/
+├── bin/pipeline.ts
+├── lib/pipeline-stack.ts      # パイプライン定義
+└── lib/app-stack.ts           # アプリケーションスタック
+```
+
+メリット:
+- パイプラインの変更もPRレビュー可能
+- 環境間の差分を最小化
+- CDK Pipelinesなら自己更新機能あり
+
+#### 方法2: CloudFormationテンプレートで管理
+
+```yaml
+# pipeline.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: my-pipeline
+      # ... パイプライン定義
+```
+
+#### 方法3: AWS CLIスクリプトで管理
+
+```bash
+# scripts/create-pipeline.sh
+#!/bin/bash
+aws codepipeline create-pipeline --cli-input-json file://pipeline-definition.json
+```
+
+### ブランチ戦略
+
+```
+main
+  ├── develop (開発環境へ自動デプロイ)
+  │     └── feature/* (機能開発)
+  └── release/* (staging/本番へデプロイ、手動承認)
+```
+
+| ブランチ | デプロイ先 | 承認 |
+|---------|-----------|------|
+| feature/* | - | - |
+| develop | dev環境 | 自動 |
+| release/* | staging → prod | 手動承認 |
+| main | - | マージのみ |
+
+### 機密情報の管理
+
+**絶対にリポジトリにコミットしないもの**:
+- AWS認証情報
+- データベースパスワード
+- APIキー
+- 秘密鍵
+
+**代替手段**:
+
+| 方法 | 用途 |
+|------|------|
+| AWS Secrets Manager | DB接続文字列、APIキー |
+| SSM Parameter Store | 設定値、非機密パラメータ |
+| 環境変数（CodeBuild） | ビルド時の設定 |
+
+```yaml
+# buildspec.yml - Secrets Managerから取得
+pre_build:
+  commands:
+    - export DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id my-db-password --query SecretString --output text)
+```
+
+---
+
 ## 比較まとめ
 
 | 観点 | ①GUI | ②CLI | ③CDK |
