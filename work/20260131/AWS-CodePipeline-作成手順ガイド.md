@@ -11,9 +11,19 @@
 7. [作成方法3: AWS CDK（推奨）](#作成方法3-aws-cdk推奨)
 8. [推奨構成: マルチシステム・マルチ環境](#推奨構成-マルチシステムマルチ環境)
 9. [Deployステージと手動承認](#deployステージと手動承認)
-10. [トラブルシューティング](#トラブルシューティング)
-11. [ベストプラクティス](#ベストプラクティス)
-12. [用語集](#用語集)
+10. [運用監視とセキュリティ](#運用監視とセキュリティ)
+11. [実践運用ガイド](#実践運用ガイド)
+    - [ロールバック戦略](#ロールバック戦略)
+    - [通知連携（Slack/Teams）](#通知連携slackteams)
+    - [テスト戦略](#テスト戦略)
+    - [DevOps KPI](#devops-kpi)
+    - [コスト最適化](#コスト最適化)
+    - [マルチアカウントデプロイ](#マルチアカウントデプロイ)
+    - [障害対応手順](#障害対応手順)
+    - [アーティファクト管理](#アーティファクト管理)
+12. [トラブルシューティング](#トラブルシューティング)
+13. [ベストプラクティス](#ベストプラクティス)
+14. [用語集](#用語集)
 
 ---
 
@@ -1105,6 +1115,1177 @@ pipeline.addStage(new MyAppStage(this, 'Dev'));
 pipeline.addStage(new MyAppStage(this, 'Prod'), {
   pre: [new ManualApprovalStep('ApproveProd')],
 });
+```
+
+---
+
+## 運用監視とセキュリティ
+
+本番環境でCI/CDパイプラインを運用するために必要な監視設定とセキュリティ対策を解説します。
+
+### CloudWatch によるパイプライン監視
+
+#### パイプライン実行の監視
+
+CodePipelineは自動的にCloudWatch Metricsにメトリクスを送信します。
+
+**主要メトリクス**:
+
+| メトリクス | 説明 | 監視ポイント |
+|-----------|------|-------------|
+| `SucceededActions` | 成功したアクション数 | デプロイ成功率 |
+| `FailedActions` | 失敗したアクション数 | 障害検知 |
+| `ActionExecutionTime` | アクション実行時間 | パフォーマンス劣化検知 |
+
+#### CloudWatch アラームの設定
+
+パイプライン失敗時に通知を受け取る設定:
+
+```bash
+# SNSトピック作成
+aws sns create-topic --name pipeline-alerts
+aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:${ACCOUNT_ID}:pipeline-alerts \
+  --protocol email --notification-endpoint your-email@example.com
+
+# パイプライン失敗アラーム作成
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Pipeline-Failure-Alert" \
+  --alarm-description "CodePipeline execution failed" \
+  --metric-name "FailedActions" \
+  --namespace "AWS/CodePipeline" \
+  --statistic Sum \
+  --period 300 \
+  --threshold 1 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --evaluation-periods 1 \
+  --alarm-actions arn:aws:sns:ap-northeast-1:${ACCOUNT_ID}:pipeline-alerts \
+  --dimensions Name=PipelineName,Value=my-infra-pipeline
+```
+
+#### EventBridge によるパイプラインイベント監視
+
+パイプラインの状態変化をリアルタイムで検知:
+
+```json
+{
+  "source": ["aws.codepipeline"],
+  "detail-type": ["CodePipeline Pipeline Execution State Change"],
+  "detail": {
+    "state": ["FAILED", "STOPPED", "SUCCEEDED"]
+  }
+}
+```
+
+**EventBridge ルール作成（CLI）**:
+
+```bash
+aws events put-rule \
+  --name "CodePipeline-State-Change" \
+  --event-pattern '{
+    "source": ["aws.codepipeline"],
+    "detail-type": ["CodePipeline Pipeline Execution State Change"],
+    "detail": {
+      "state": ["FAILED"]
+    }
+  }'
+
+aws events put-targets \
+  --rule "CodePipeline-State-Change" \
+  --targets "Id"="1","Arn"="arn:aws:sns:ap-northeast-1:${ACCOUNT_ID}:pipeline-alerts"
+```
+
+#### CodeBuild ログの監視
+
+CodeBuildのビルドログはCloudWatch Logsに自動保存されます。
+
+**ログの検索**:
+
+```bash
+# ビルドエラーを検索
+aws logs filter-log-events \
+  --log-group-name "/aws/codebuild/my-infra-build" \
+  --filter-pattern "ERROR"
+
+# 最新のログを取得
+aws logs tail "/aws/codebuild/my-infra-build" --follow
+```
+
+**ログメトリクスフィルターの設定**:
+
+```bash
+# エラー発生回数をメトリクス化
+aws logs put-metric-filter \
+  --log-group-name "/aws/codebuild/my-infra-build" \
+  --filter-name "BuildErrors" \
+  --filter-pattern "ERROR" \
+  --metric-transformations \
+    metricName=BuildErrorCount,metricNamespace=CustomMetrics,metricValue=1
+```
+
+### CloudWatch ダッシュボード
+
+パイプラインの状態を一覧表示:
+
+```json
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Pipeline Success Rate",
+        "metrics": [
+          ["AWS/CodePipeline", "SucceededActions", "PipelineName", "my-infra-pipeline"],
+          [".", "FailedActions", ".", "."]
+        ],
+        "period": 3600,
+        "stat": "Sum"
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Build Duration",
+        "metrics": [
+          ["AWS/CodeBuild", "Duration", "ProjectName", "my-infra-build"]
+        ],
+        "period": 3600,
+        "stat": "Average"
+      }
+    }
+  ]
+}
+```
+
+### セキュリティ対策
+
+#### IAM 最小権限の原則
+
+**悪い例（本番環境で使用禁止）**:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "*",
+  "Resource": "*"
+}
+```
+
+**良い例（必要最小限の権限）**:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationDeploy",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents"
+      ],
+      "Resource": "arn:aws:cloudformation:ap-northeast-1:*:stack/my-app-*/*"
+    },
+    {
+      "Sid": "S3ArtifactAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::codepipeline-ap-northeast-1-*/my-app-*"
+    }
+  ]
+}
+```
+
+#### シークレット管理
+
+**絶対にやってはいけないこと**:
+
+```yaml
+# ❌ 悪い例: buildspec.yml にシークレットを直接記載
+env:
+  variables:
+    DB_PASSWORD: "MySecretPassword123"  # 絶対NG！
+```
+
+**推奨方法1: Systems Manager Parameter Store**:
+
+```yaml
+# ✅ 良い例: Parameter Store から取得
+env:
+  parameter-store:
+    DB_PASSWORD: /myapp/prod/db-password
+```
+
+**推奨方法2: Secrets Manager**:
+
+```yaml
+# ✅ 良い例: Secrets Manager から取得
+env:
+  secrets-manager:
+    DB_CREDENTIALS: myapp/prod/db-credentials
+```
+
+#### CloudTrail による監査ログ
+
+パイプラインの操作履歴を記録:
+
+```bash
+# CloudTrail証跡の作成
+aws cloudtrail create-trail \
+  --name pipeline-audit-trail \
+  --s3-bucket-name my-cloudtrail-logs-bucket \
+  --include-global-service-events
+
+# ログの確認
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventSource,AttributeValue=codepipeline.amazonaws.com
+```
+
+**監視すべきイベント**:
+
+| イベント | 説明 | 重要度 |
+|---------|------|--------|
+| `CreatePipeline` | パイプライン作成 | 中 |
+| `UpdatePipeline` | パイプライン更新 | 高 |
+| `DeletePipeline` | パイプライン削除 | 高 |
+| `StartPipelineExecution` | 手動実行 | 中 |
+| `PutJobSuccessResult` | アクション成功 | 低 |
+| `PutJobFailureResult` | アクション失敗 | 高 |
+
+#### ブランチ保護とコードレビュー
+
+**CodeCommit ブランチ保護**:
+
+```bash
+# mainブランチへの直接pushを禁止するトリガー
+aws codecommit put-repository-triggers \
+  --repository-name my-infra \
+  --triggers '[{
+    "name": "DenyDirectPush",
+    "destinationArn": "arn:aws:lambda:ap-northeast-1:${ACCOUNT_ID}:function:DenyDirectPush",
+    "branches": ["main"],
+    "events": ["updateReference"]
+  }]'
+```
+
+**承認ルールの設定（CodeCommit）**:
+
+```bash
+# プルリクエスト承認ルール
+aws codecommit create-approval-rule-template \
+  --approval-rule-template-name "RequireApproval" \
+  --approval-rule-template-content '{
+    "Version": "2018-11-08",
+    "Statements": [{
+      "Type": "Approvers",
+      "NumberOfApprovalsNeeded": 1,
+      "ApprovalPoolMembers": ["arn:aws:iam::*:role/CodeReviewer"]
+    }]
+  }'
+```
+
+#### 静的解析の組み込み
+
+**buildspec.yml での静的解析**:
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - pip install cfn-lint checkov
+
+  pre_build:
+    commands:
+      # CloudFormation Linter
+      - echo "=== Running cfn-lint ==="
+      - cfn-lint template.yaml
+
+      # Checkov（セキュリティスキャン）
+      - echo "=== Running Checkov ==="
+      - checkov -f template.yaml --framework cloudformation
+
+  build:
+    commands:
+      - aws cloudformation deploy --template-file template.yaml --stack-name my-stack
+```
+
+**CDK Nag（CDKプロジェクト向け）**:
+
+```typescript
+import { Aspects } from 'aws-cdk-lib';
+import { AwsSolutionsChecks } from 'cdk-nag';
+
+// アプリケーション全体にセキュリティチェックを適用
+Aspects.of(app).add(new AwsSolutionsChecks());
+```
+
+### 運用チェックリスト
+
+#### デプロイ前チェック
+
+- [ ] IAMロールは最小権限になっているか
+- [ ] シークレットはParameter Store/Secrets Managerで管理しているか
+- [ ] buildspec.ymlに機密情報が含まれていないか
+- [ ] 静的解析（cfn-lint, checkov）が組み込まれているか
+- [ ] 本番デプロイ前に手動承認ステージがあるか
+
+#### 運用開始後チェック
+
+- [ ] CloudWatchアラームが設定されているか
+- [ ] 失敗時のSNS通知が設定されているか
+- [ ] CloudTrailでAPIコールが記録されているか
+- [ ] ログの保持期間は適切か
+- [ ] 定期的なセキュリティレビューを実施しているか
+
+---
+
+## 実践運用ガイド
+
+本番環境でCI/CDパイプラインを運用する際に必要な実践的なノウハウを解説します。
+
+### ロールバック戦略
+
+デプロイ失敗時に迅速にサービスを復旧させるための戦略です。
+
+#### CloudFormation のロールバック設定
+
+**自動ロールバック（推奨）**:
+
+```yaml
+# buildspec.yml
+phases:
+  build:
+    commands:
+      - aws cloudformation deploy \
+          --template-file template.yaml \
+          --stack-name my-app-stack \
+          --capabilities CAPABILITY_IAM \
+          --rollback-configuration "RollbackTriggers=[{Arn=arn:aws:cloudwatch:ap-northeast-1:${ACCOUNT_ID}:alarm:MyApp-HealthCheck,Type=AWS::CloudWatch::Alarm}]"
+```
+
+**手動ロールバック手順**:
+
+```bash
+# 1. 現在のスタックイベントを確認
+aws cloudformation describe-stack-events --stack-name my-app-stack
+
+# 2. 失敗したスタックを前のバージョンにロールバック
+aws cloudformation rollback-stack --stack-name my-app-stack
+
+# 3. または特定のバージョンに戻す（変更セット経由）
+aws cloudformation create-change-set \
+  --stack-name my-app-stack \
+  --change-set-name rollback-to-v1 \
+  --template-url s3://my-bucket/templates/v1/template.yaml
+
+aws cloudformation execute-change-set \
+  --stack-name my-app-stack \
+  --change-set-name rollback-to-v1
+```
+
+#### CodeDeploy のロールバック
+
+```bash
+# 自動ロールバックを有効化
+aws deploy update-deployment-group \
+  --application-name my-app \
+  --deployment-group-name prod \
+  --auto-rollback-configuration "enabled=true,events=DEPLOYMENT_FAILURE,DEPLOYMENT_STOP_ON_ALARM"
+
+# 手動ロールバック（前のデプロイに戻す）
+aws deploy create-deployment \
+  --application-name my-app \
+  --deployment-group-name prod \
+  --revision revisionType=S3,s3Location="{bucket=my-bucket,key=previous-version.zip,bundleType=zip}"
+```
+
+#### ロールバック判断フローチャート
+
+```
+デプロイ完了
+    ↓
+ヘルスチェック実行
+    ↓
+┌─────────────────┐
+│ 正常？          │
+└─────────────────┘
+    │YES        │NO
+    ↓           ↓
+  完了      ┌─────────────────┐
+            │ 自動ロールバック │
+            │ 設定あり？       │
+            └─────────────────┘
+                │YES        │NO
+                ↓           ↓
+           自動復旧    手動対応
+                          ↓
+                    ┌─────────────────┐
+                    │ 5分以内に復旧   │
+                    │ 可能？          │
+                    └─────────────────┘
+                        │YES        │NO
+                        ↓           ↓
+                    手動ロール   インシデント
+                    バック実行    対応開始
+```
+
+### 通知連携（Slack/Teams）
+
+#### Slack 通知の設定
+
+**1. AWS Chatbot を使用（推奨）**:
+
+```bash
+# SNSトピック作成
+aws sns create-topic --name pipeline-notifications
+
+# Chatbotの設定はコンソールから実施
+# 1. AWS Chatbot コンソールを開く
+# 2. Slackワークスペースを連携
+# 3. チャンネルを設定
+# 4. SNSトピックを紐付け
+```
+
+**2. Lambda を使用したカスタム通知**:
+
+```python
+# lambda_function.py
+import json
+import urllib3
+import os
+
+def lambda_handler(event, context):
+    # SNSメッセージをパース
+    message = json.loads(event['Records'][0]['Sns']['Message'])
+
+    # Slack Webhook URL（環境変数から取得）
+    webhook_url = os.environ['SLACK_WEBHOOK_URL']
+
+    # パイプライン情報を抽出
+    pipeline = message.get('detail', {}).get('pipeline', 'Unknown')
+    state = message.get('detail', {}).get('state', 'Unknown')
+
+    # 色を状態に応じて設定
+    color = {
+        'SUCCEEDED': '#36a64f',  # 緑
+        'FAILED': '#ff0000',     # 赤
+        'STARTED': '#439fe0',    # 青
+    }.get(state, '#808080')
+
+    # Slackメッセージを構築
+    slack_message = {
+        'attachments': [{
+            'color': color,
+            'title': f'Pipeline: {pipeline}',
+            'text': f'State: {state}',
+            'footer': 'AWS CodePipeline',
+            'ts': int(context.get_remaining_time_in_millis() / 1000)
+        }]
+    }
+
+    # Slackに送信
+    http = urllib3.PoolManager()
+    response = http.request(
+        'POST',
+        webhook_url,
+        body=json.dumps(slack_message),
+        headers={'Content-Type': 'application/json'}
+    )
+
+    return {'statusCode': response.status}
+```
+
+**EventBridge ルールの設定**:
+
+```bash
+aws events put-rule \
+  --name "Pipeline-Slack-Notification" \
+  --event-pattern '{
+    "source": ["aws.codepipeline"],
+    "detail-type": ["CodePipeline Pipeline Execution State Change"],
+    "detail": {
+      "state": ["SUCCEEDED", "FAILED", "STARTED"]
+    }
+  }'
+
+aws events put-targets \
+  --rule "Pipeline-Slack-Notification" \
+  --targets "Id"="1","Arn"="arn:aws:lambda:ap-northeast-1:${ACCOUNT_ID}:function:SlackNotifier"
+```
+
+#### Microsoft Teams 通知
+
+```python
+# teams_notification.py
+import json
+import urllib3
+
+def send_teams_notification(webhook_url, pipeline, state, execution_id):
+    color = {
+        'SUCCEEDED': '00FF00',
+        'FAILED': 'FF0000',
+        'STARTED': '0000FF',
+    }.get(state, '808080')
+
+    message = {
+        "@type": "MessageCard",
+        "@context": "http://schema.org/extensions",
+        "themeColor": color,
+        "summary": f"Pipeline {pipeline} - {state}",
+        "sections": [{
+            "activityTitle": f"Pipeline: {pipeline}",
+            "facts": [
+                {"name": "State", "value": state},
+                {"name": "Execution ID", "value": execution_id}
+            ],
+            "markdown": True
+        }],
+        "potentialAction": [{
+            "@type": "OpenUri",
+            "name": "View Pipeline",
+            "targets": [{
+                "os": "default",
+                "uri": f"https://ap-northeast-1.console.aws.amazon.com/codesuite/codepipeline/pipelines/{pipeline}/view"
+            }]
+        }]
+    }
+
+    http = urllib3.PoolManager()
+    http.request('POST', webhook_url, body=json.dumps(message))
+```
+
+#### PagerDuty/Opsgenie 連携（オンコール対応）
+
+```bash
+# PagerDuty Events API v2 を使用
+aws events put-targets \
+  --rule "Pipeline-Critical-Failure" \
+  --targets '[{
+    "Id": "pagerduty",
+    "Arn": "arn:aws:events:ap-northeast-1:${ACCOUNT_ID}:api-destination/PagerDuty",
+    "HttpParameters": {
+      "HeaderParameters": {
+        "Content-Type": "application/json"
+      }
+    },
+    "InputTransformer": {
+      "InputPathsMap": {
+        "pipeline": "$.detail.pipeline",
+        "state": "$.detail.state"
+      },
+      "InputTemplate": "{\"routing_key\":\"YOUR_ROUTING_KEY\",\"event_action\":\"trigger\",\"payload\":{\"summary\":\"Pipeline <pipeline> failed\",\"severity\":\"critical\",\"source\":\"AWS CodePipeline\"}}"
+    }
+  }]'
+```
+
+### テスト戦略
+
+パイプライン内でのテスト実行戦略です。
+
+#### テストピラミッド
+
+```
+              ┌─────────────┐
+              │   E2E Test  │  ← 少数、遅い、高コスト
+              │    (10%)    │
+              ├─────────────┤
+              │ Integration │  ← 中程度
+              │   Test      │
+              │   (20%)     │
+              ├─────────────┤
+              │  Unit Test  │  ← 多数、高速、低コスト
+              │   (70%)     │
+              └─────────────┘
+```
+
+#### buildspec.yml でのテスト実行
+
+```yaml
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - npm ci
+
+  pre_build:
+    commands:
+      # ユニットテスト
+      - echo "=== Running Unit Tests ==="
+      - npm run test:unit -- --coverage
+
+      # 静的解析
+      - echo "=== Running Linter ==="
+      - npm run lint
+
+      # セキュリティスキャン
+      - echo "=== Running Security Scan ==="
+      - npm audit --audit-level=high
+
+  build:
+    commands:
+      - npm run build
+
+      # 統合テスト
+      - echo "=== Running Integration Tests ==="
+      - npm run test:integration
+
+  post_build:
+    commands:
+      # E2Eテスト（本番デプロイ後に実行することも）
+      - echo "=== Running E2E Tests ==="
+      - npm run test:e2e || echo "E2E tests completed with warnings"
+
+reports:
+  # テストレポートをCodeBuildに統合
+  unit-tests:
+    files:
+      - 'coverage/junit.xml'
+    file-format: JUNITXML
+
+  coverage:
+    files:
+      - 'coverage/cobertura-coverage.xml'
+    file-format: COBERTURAXML
+
+artifacts:
+  files:
+    - '**/*'
+  exclude-paths:
+    - 'node_modules/**/*'
+```
+
+#### テストステージの分離
+
+```
+Source → Build → Test(Unit) → Test(Integration) → Approval → Deploy → Test(E2E)
+                     ↓              ↓
+                 並列実行可能    スモークテスト
+```
+
+**パイプラインでのテストステージ分離（CDK）**:
+
+```typescript
+const pipeline = new codepipeline.Pipeline(this, 'Pipeline', {
+  stages: [
+    { stageName: 'Source', actions: [sourceAction] },
+    { stageName: 'Build', actions: [buildAction] },
+    {
+      stageName: 'Test',
+      actions: [
+        // 並列実行
+        new codepipeline_actions.CodeBuildAction({
+          actionName: 'UnitTest',
+          project: unitTestProject,
+          input: buildOutput,
+          runOrder: 1,
+        }),
+        new codepipeline_actions.CodeBuildAction({
+          actionName: 'SecurityScan',
+          project: securityScanProject,
+          input: buildOutput,
+          runOrder: 1,  // 同じrunOrderで並列実行
+        }),
+        new codepipeline_actions.CodeBuildAction({
+          actionName: 'IntegrationTest',
+          project: integrationTestProject,
+          input: buildOutput,
+          runOrder: 2,  // Unit/Securityの後に実行
+        }),
+      ],
+    },
+    { stageName: 'Deploy', actions: [deployAction] },
+  ],
+});
+```
+
+### DevOps KPI
+
+パイプラインの健全性を測定する指標です。
+
+#### DORA メトリクス
+
+| メトリクス | 説明 | 目標値（エリート） |
+|-----------|------|-------------------|
+| **デプロイ頻度** | 本番へのデプロイ回数 | 1日複数回 |
+| **リードタイム** | コミットから本番デプロイまで | 1時間未満 |
+| **MTTR** | 障害発生から復旧まで | 1時間未満 |
+| **変更失敗率** | デプロイ失敗の割合 | 0-15% |
+
+#### CloudWatch メトリクスでのKPI計測
+
+```bash
+# カスタムメトリクスを送信するスクリプト
+#!/bin/bash
+
+# デプロイ頻度（過去24時間のデプロイ成功数）
+DEPLOY_COUNT=$(aws codepipeline list-pipeline-executions \
+  --pipeline-name my-pipeline \
+  --query "pipelineExecutionSummaries[?status=='Succeeded' && startTime>=\`$(date -d '24 hours ago' --iso-8601=seconds)\`]" \
+  --output json | jq length)
+
+aws cloudwatch put-metric-data \
+  --namespace "DevOps/KPI" \
+  --metric-name "DeployFrequency" \
+  --value $DEPLOY_COUNT \
+  --unit "Count" \
+  --dimensions PipelineName=my-pipeline
+
+# 変更失敗率
+TOTAL=$(aws codepipeline list-pipeline-executions \
+  --pipeline-name my-pipeline \
+  --query "length(pipelineExecutionSummaries[?startTime>=\`$(date -d '7 days ago' --iso-8601=seconds)\`])")
+
+FAILED=$(aws codepipeline list-pipeline-executions \
+  --pipeline-name my-pipeline \
+  --query "length(pipelineExecutionSummaries[?status=='Failed' && startTime>=\`$(date -d '7 days ago' --iso-8601=seconds)\`])")
+
+if [ $TOTAL -gt 0 ]; then
+  FAILURE_RATE=$(echo "scale=2; $FAILED / $TOTAL * 100" | bc)
+else
+  FAILURE_RATE=0
+fi
+
+aws cloudwatch put-metric-data \
+  --namespace "DevOps/KPI" \
+  --metric-name "ChangeFailureRate" \
+  --value $FAILURE_RATE \
+  --unit "Percent" \
+  --dimensions PipelineName=my-pipeline
+```
+
+#### KPI ダッシュボード（CloudWatch）
+
+```json
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Deploy Frequency (Daily)",
+        "metrics": [["DevOps/KPI", "DeployFrequency", "PipelineName", "my-pipeline"]],
+        "period": 86400,
+        "stat": "Sum",
+        "region": "ap-northeast-1"
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Change Failure Rate (%)",
+        "metrics": [["DevOps/KPI", "ChangeFailureRate", "PipelineName", "my-pipeline"]],
+        "period": 604800,
+        "stat": "Average",
+        "region": "ap-northeast-1"
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Pipeline Duration (Lead Time)",
+        "metrics": [
+          ["AWS/CodePipeline", "SucceededActions", "PipelineName", "my-pipeline", {"stat": "SampleCount"}]
+        ],
+        "period": 3600
+      }
+    }
+  ]
+}
+```
+
+### コスト最適化
+
+パイプライン実行コストを最適化する方法です。
+
+#### コスト内訳
+
+| サービス | 課金単位 | 目安コスト |
+|---------|---------|-----------|
+| CodePipeline | アクティブパイプライン/月 | $1/パイプライン |
+| CodeBuild | ビルド時間（分） | $0.005/分（small） |
+| S3（アーティファクト） | ストレージ + リクエスト | $0.023/GB/月 |
+| CloudWatch Logs | ログ保存量 | $0.033/GB |
+
+#### コスト削減テクニック
+
+**1. CodeBuild インスタンスサイズの最適化**:
+
+```yaml
+# buildspec.yml でキャッシュを活用
+version: 0.2
+
+cache:
+  paths:
+    - 'node_modules/**/*'
+    - '.npm/**/*'
+
+phases:
+  install:
+    commands:
+      # キャッシュがあればスキップ
+      - '[ -d node_modules ] && echo "Using cached node_modules" || npm ci'
+```
+
+**2. S3 ライフサイクルポリシー**:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket codepipeline-ap-northeast-1-xxxxx \
+  --lifecycle-configuration '{
+    "Rules": [{
+      "ID": "DeleteOldArtifacts",
+      "Status": "Enabled",
+      "Filter": {"Prefix": ""},
+      "Expiration": {"Days": 30},
+      "NoncurrentVersionExpiration": {"NoncurrentDays": 7}
+    }]
+  }'
+```
+
+**3. CloudWatch Logs 保持期間**:
+
+```bash
+aws logs put-retention-policy \
+  --log-group-name /aws/codebuild/my-build-project \
+  --retention-in-days 14
+```
+
+**4. 並列実行の活用（時間短縮）**:
+
+```typescript
+// CDK: 並列ビルドで時間短縮 = コスト削減
+{
+  stageName: 'Build',
+  actions: [
+    new CodeBuildAction({ actionName: 'Build-A', runOrder: 1 }),
+    new CodeBuildAction({ actionName: 'Build-B', runOrder: 1 }),  // 並列
+    new CodeBuildAction({ actionName: 'Build-C', runOrder: 1 }),  // 並列
+  ],
+}
+```
+
+#### コスト監視アラーム
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name "CodeBuild-CostAlert" \
+  --alarm-description "CodeBuild cost exceeded threshold" \
+  --metric-name "EstimatedCharges" \
+  --namespace "AWS/Billing" \
+  --statistic Maximum \
+  --period 86400 \
+  --threshold 50 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=ServiceName,Value=CodeBuild \
+  --evaluation-periods 1 \
+  --alarm-actions arn:aws:sns:ap-northeast-1:${ACCOUNT_ID}:billing-alerts
+```
+
+### マルチアカウントデプロイ
+
+本番環境では、開発/検証/本番を別アカウントで管理することが推奨されます。
+
+#### クロスアカウント構成
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        DevOps Account (中央管理)                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
+│  │ CodeCommit  │  │ CodePipeline│  │   S3       │                  │
+│  │             │  │             │  │(Artifacts) │                  │
+│  └─────────────┘  └──────┬──────┘  └─────────────┘                  │
+└──────────────────────────┼──────────────────────────────────────────┘
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+        ▼                  ▼                  ▼
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│  Dev Account  │  │  Stg Account  │  │ Prod Account  │
+│ (111111111111)│  │ (222222222222)│  │ (333333333333)│
+│               │  │               │  │               │
+│ CloudFormation│  │ CloudFormation│  │ CloudFormation│
+│    deploy     │  │    deploy     │  │    deploy     │
+└───────────────┘  └───────────────┘  └───────────────┘
+```
+
+#### クロスアカウント IAM ロール設定
+
+**ターゲットアカウント（デプロイ先）のロール**:
+
+```yaml
+# cross-account-role.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cross-account role for CodePipeline
+
+Parameters:
+  DevOpsAccountId:
+    Type: String
+    Description: DevOps account ID
+
+Resources:
+  CrossAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CodePipeline-CrossAccount-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${DevOpsAccountId}:root'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+      Policies:
+        - PolicyName: S3ArtifactAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                Resource: !Sub 'arn:aws:s3:::codepipeline-${DevOpsAccountId}-*/*'
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                Resource: '*'
+```
+
+**DevOpsアカウントのパイプライン設定**:
+
+```typescript
+// CDK: クロスアカウントデプロイ
+const prodDeployRole = iam.Role.fromRoleArn(
+  this, 'ProdDeployRole',
+  'arn:aws:iam::333333333333:role/CodePipeline-CrossAccount-Role'
+);
+
+new codepipeline_actions.CloudFormationCreateUpdateStackAction({
+  actionName: 'DeployToProd',
+  stackName: 'my-app-stack',
+  templatePath: buildOutput.atPath('template.yaml'),
+  adminPermissions: true,
+  role: prodDeployRole,  // クロスアカウントロールを指定
+});
+```
+
+### 障害対応手順
+
+パイプライン障害発生時の対応フローです。
+
+#### 障害対応フローチャート
+
+```
+アラート受信
+    ↓
+┌─────────────────┐
+│ 1. 初期確認     │  ← 5分以内
+│   - 影響範囲    │
+│   - 緊急度判定  │
+└─────────────────┘
+    ↓
+┌─────────────────┐
+│ 2. 情報収集     │  ← 10分以内
+│   - ログ確認    │
+│   - メトリクス  │
+│   - 最近の変更  │
+└─────────────────┘
+    ↓
+┌─────────────────┐
+│ 3. 判断         │
+│   - 復旧優先？  │
+│   - 原因調査？  │
+└─────────────────┘
+    │
+┌───┴───┐
+↓       ↓
+復旧   調査
+ ↓      ↓
+ロール  詳細
+バック  分析
+    │
+    ↓
+┌─────────────────┐
+│ 4. 再発防止     │
+│   - RCA作成     │
+│   - 対策実施    │
+└─────────────────┘
+```
+
+#### 障害対応コマンド集
+
+```bash
+#!/bin/bash
+# incident-response.sh
+
+# 1. パイプライン状態確認
+aws codepipeline get-pipeline-state --name my-pipeline
+
+# 2. 失敗したアクションの詳細
+aws codepipeline get-pipeline-execution \
+  --pipeline-name my-pipeline \
+  --pipeline-execution-id <execution-id>
+
+# 3. CodeBuildログ取得
+aws logs get-log-events \
+  --log-group-name /aws/codebuild/my-build \
+  --log-stream-name <log-stream-name> \
+  --limit 100
+
+# 4. 最近の変更（CloudTrail）
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventSource,AttributeValue=codepipeline.amazonaws.com \
+  --start-time $(date -d '1 hour ago' --iso-8601=seconds)
+
+# 5. 緊急ロールバック
+aws cloudformation rollback-stack --stack-name my-app-stack
+
+# 6. パイプライン無効化（緊急停止）
+aws codepipeline disable-stage-transition \
+  --pipeline-name my-pipeline \
+  --stage-name Deploy \
+  --transition-type Inbound \
+  --reason "Emergency stop due to incident"
+```
+
+#### インシデント報告テンプレート
+
+```markdown
+# インシデント報告書
+
+## 概要
+- **発生日時**: YYYY-MM-DD HH:MM (JST)
+- **復旧日時**: YYYY-MM-DD HH:MM (JST)
+- **影響範囲**: [サービス名、ユーザー数など]
+- **重大度**: Critical / High / Medium / Low
+
+## タイムライン
+| 時刻 | イベント |
+|------|---------|
+| HH:MM | アラート発報 |
+| HH:MM | 初期対応開始 |
+| HH:MM | 原因特定 |
+| HH:MM | 復旧完了 |
+
+## 根本原因
+[原因の詳細説明]
+
+## 対応内容
+[実施した対応の詳細]
+
+## 再発防止策
+- [ ] 対策1
+- [ ] 対策2
+- [ ] 対策3
+
+## 教訓
+[今後のために学んだこと]
+```
+
+### アーティファクト管理
+
+ビルド成果物のバージョン管理と保持ポリシーです。
+
+#### S3 バージョニングの有効化
+
+```bash
+aws s3api put-bucket-versioning \
+  --bucket codepipeline-artifacts-bucket \
+  --versioning-configuration Status=Enabled
+```
+
+#### アーティファクト保持ポリシー
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "RetainRecentArtifacts",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Transitions": [
+        {
+          "Days": 30,
+          "StorageClass": "STANDARD_IA"
+        },
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER"
+        }
+      ],
+      "Expiration": {
+        "Days": 365
+      },
+      "NoncurrentVersionTransitions": [
+        {
+          "NoncurrentDays": 30,
+          "StorageClass": "GLACIER"
+        }
+      ],
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 90
+      }
+    }
+  ]
+}
+```
+
+#### アーティファクトのタグ付け
+
+```yaml
+# buildspec.yml でアーティファクトにメタデータを付与
+version: 0.2
+
+env:
+  exported-variables:
+    - BUILD_VERSION
+    - COMMIT_HASH
+
+phases:
+  pre_build:
+    commands:
+      - export BUILD_VERSION=$(date +%Y%m%d-%H%M%S)
+      - export COMMIT_HASH=$(git rev-parse --short HEAD)
+
+  post_build:
+    commands:
+      # アーティファクトにタグを付与
+      - |
+        aws s3 cp dist/app.zip s3://my-artifacts-bucket/releases/${BUILD_VERSION}/app.zip \
+          --metadata "commit=${COMMIT_HASH},build-time=$(date -Iseconds)"
+
+artifacts:
+  files:
+    - dist/**/*
+  name: build-${BUILD_VERSION}
+```
+
+#### アーティファクト一覧の管理
+
+```bash
+# 最新5件のアーティファクトを表示
+aws s3api list-object-versions \
+  --bucket codepipeline-artifacts-bucket \
+  --prefix "my-pipeline/" \
+  --max-keys 5 \
+  --query 'Versions[*].{Key:Key,VersionId:VersionId,LastModified:LastModified}'
+
+# 特定バージョンのアーティファクトを取得
+aws s3 cp \
+  s3://codepipeline-artifacts-bucket/my-pipeline/artifact.zip \
+  ./artifact.zip \
+  --version-id "xxxxx"
 ```
 
 ---
