@@ -1,0 +1,75 @@
+version: 0.2
+
+env:
+  variables:
+    ENVIRONMENT: "dev"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "Installing jq"
+      - yum install -y jq || apt-get install -y jq || true
+
+  pre_build:
+    commands:
+      - echo "Loading environment config for $ENVIRONMENT"
+      - export CONFIG_FILE="environments/${ENVIRONMENT}.json"
+      - cat $CONFIG_FILE
+      - export STACK_PREFIX=$(jq -r '.stackPrefix' $CONFIG_FILE)
+      - export SYSTEM_NAME=$(jq -r '.systemName' $CONFIG_FILE)
+      - echo "Stack Prefix is $STACK_PREFIX"
+
+  build:
+    commands:
+      - echo "Deploying stacks in order..."
+      - echo "Step 1/5 - Deploying Network Stack"
+      - |
+        aws cloudformation deploy \
+          --template-file stacks/01-network.yaml \
+          --stack-name ${STACK_PREFIX}-network \
+          --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+          --tags Environment=${ENVIRONMENT} System=${SYSTEM_NAME} ManagedBy=CodePipeline \
+          --no-fail-on-empty-changeset
+      - echo "Step 2/5 - Deploying Security Stack"
+      - |
+        aws cloudformation deploy \
+          --template-file stacks/02-security.yaml \
+          --stack-name ${STACK_PREFIX}-security \
+          --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --tags Environment=${ENVIRONMENT} System=${SYSTEM_NAME} ManagedBy=CodePipeline \
+          --no-fail-on-empty-changeset
+      - echo "Step 3/5 - Deploying Storage Stack"
+      - |
+        aws cloudformation deploy \
+          --template-file stacks/03-storage.yaml \
+          --stack-name ${STACK_PREFIX}-storage \
+          --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+          --tags Environment=${ENVIRONMENT} System=${SYSTEM_NAME} ManagedBy=CodePipeline \
+          --no-fail-on-empty-changeset
+      - echo "Step 4/5 - Deploying Compute Stack"
+      - |
+        aws cloudformation deploy \
+          --template-file stacks/04-compute.yaml \
+          --stack-name ${STACK_PREFIX}-compute \
+          --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+          --capabilities CAPABILITY_IAM \
+          --tags Environment=${ENVIRONMENT} System=${SYSTEM_NAME} ManagedBy=CodePipeline \
+          --no-fail-on-empty-changeset
+      - echo "Step 5/5 - Deploying Monitoring Stack"
+      - |
+        ALARM_EMAIL=$(jq -r '.parameters.AlarmEmail // ""' $CONFIG_FILE)
+        aws cloudformation deploy \
+          --template-file stacks/05-monitoring.yaml \
+          --stack-name ${STACK_PREFIX}-monitoring \
+          --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} AlarmEmail="${ALARM_EMAIL}" \
+          --tags Environment=${ENVIRONMENT} System=${SYSTEM_NAME} ManagedBy=CodePipeline \
+          --no-fail-on-empty-changeset
+
+  post_build:
+    commands:
+      - echo "All stacks deployed successfully for environment $ENVIRONMENT"
+      - echo "Deployed stacks:"
+      - aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --query "StackSummaries[?starts_with(StackName, '${STACK_PREFIX}')].{Name:StackName,Status:StackStatus}" --output table

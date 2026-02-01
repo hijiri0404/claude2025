@@ -1,0 +1,22 @@
+{
+  "environment": "prod",
+  "systemName": "system-a",
+  "stackPrefix": "system-a-prod",
+  "parameters": {
+    "Environment": "prod",
+    "SystemName": "system-a",
+    "AlarmEmail": "alerts@example.com"
+  },
+  "stackOrder": [
+    "01-network",
+    "02-security",
+    "03-storage",
+    "04-compute",
+    "05-monitoring"
+  ],
+  "tags": {
+    "Environment": "prod",
+    "System": "system-a",
+    "ManagedBy": "CodePipeline"
+  }
+}

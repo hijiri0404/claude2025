@@ -1,0 +1,22 @@
+{
+  "environment": "stg",
+  "systemName": "system-a",
+  "stackPrefix": "system-a-stg",
+  "parameters": {
+    "Environment": "stg",
+    "SystemName": "system-a",
+    "AlarmEmail": ""
+  },
+  "stackOrder": [
+    "01-network",
+    "02-security",
+    "03-storage",
+    "04-compute",
+    "05-monitoring"
+  ],
+  "tags": {
+    "Environment": "stg",
+    "System": "system-a",
+    "ManagedBy": "CodePipeline"
+  }
+}
