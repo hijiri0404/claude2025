@@ -1,5 +1,7 @@
 # AWS CodePipeline CI/CD パイプライン作成手順ガイド
 
+> **検証環境**: AWS ap-northeast-1 (東京リージョン) / 2026-02-02 検証済み
+
 ## 目次
 
 1. [はじめに（初学者向け）](#はじめに初学者向け)
@@ -7,8 +9,8 @@
 3. [アーキテクチャ概要](#アーキテクチャ概要)
 4. [前提条件](#前提条件)
 5. [作成方法1: マネジメントコンソール（GUI）](#作成方法1-マネジメントコンソールgui)
-6. [作成方法2: AWS CLI](#作成方法2-aws-cli)
-7. [作成方法3: AWS CDK（推奨）](#作成方法3-aws-cdk推奨)
+6. [作成方法2: AWS CLI](#作成方法2-aws-cli) **[検証済]**
+7. [作成方法3: AWS CDK（推奨）](#作成方法3-aws-cdk推奨) **[検証済]**
 8. [推奨構成: マルチシステム・マルチ環境](#推奨構成-マルチシステムマルチ環境)
 9. [Deployステージと手動承認](#deployステージと手動承認)
 10. [運用監視とセキュリティ](#運用監視とセキュリティ)
@@ -21,9 +23,10 @@
     - [マルチアカウントデプロイ](#マルチアカウントデプロイ)
     - [障害対応手順](#障害対応手順)
     - [アーティファクト管理](#アーティファクト管理)
-12. [トラブルシューティング](#トラブルシューティング)
-13. [ベストプラクティス](#ベストプラクティス)
-14. [用語集](#用語集)
+12. [クリーンアップ](#クリーンアップ)
+13. [トラブルシューティング](#トラブルシューティング)
+14. [ベストプラクティス](#ベストプラクティス)
+15. [用語集](#用語集)
 
 ---
 
@@ -472,6 +475,8 @@ CodeBuildサービスロールに以下のポリシーを追加:
 
 ## 作成方法2: AWS CLI
 
+> **検証済み**: 2026-02-02 ap-northeast-1 で動作確認済み
+
 自動化スクリプト向けの方法です。
 
 > **初学者向け**: GUIで一度作成した後にCLIを試すと理解しやすいです。CLIは「GUIでやった操作をコマンドで再現できる」という点がメリットです。スクリプト化すれば、同じ環境を何度でも再現できます。
@@ -624,6 +629,8 @@ echo "Pipeline: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/
 ---
 
 ## 作成方法3: AWS CDK（推奨）
+
+> **検証済み**: 2026-02-02 ap-northeast-1 / CDK v2.1100.0 で動作確認済み
 
 本番環境向けの方法です。パイプライン自体をコード管理できます。
 
@@ -2286,6 +2293,117 @@ aws s3 cp \
   s3://codepipeline-artifacts-bucket/my-pipeline/artifact.zip \
   ./artifact.zip \
   --version-id "xxxxx"
+```
+
+---
+
+## クリーンアップ
+
+学習・検証後にリソースを削除してコストを抑えるための手順です。
+
+> **注意**: 削除操作は取り消せません。本番環境のリソースを誤って削除しないよう注意してください。
+
+### CLI で作成したリソースの削除
+
+```bash
+#!/bin/bash
+# cleanup-cli.sh
+
+# 変数設定（作成時と同じ値を使用）
+REPO_NAME="my-infra-repo"
+BUILD_PROJECT="my-infra-build"
+PIPELINE_NAME="my-infra-pipeline"
+
+# 1. パイプライン削除
+echo "=== Deleting Pipeline ==="
+aws codepipeline delete-pipeline --name $PIPELINE_NAME
+
+# 2. CodeBuildプロジェクト削除
+echo "=== Deleting CodeBuild Project ==="
+aws codebuild delete-project --name $BUILD_PROJECT
+
+# 3. CodeCommitリポジトリ削除
+echo "=== Deleting CodeCommit Repository ==="
+aws codecommit delete-repository --repository-name $REPO_NAME
+
+# 4. IAMロール削除（ポリシーを先にデタッチ）
+echo "=== Deleting IAM Roles ==="
+
+# CodeBuildロールのポリシーをデタッチ
+for policy in AWSCloudFormationFullAccess AmazonS3FullAccess CloudWatchLogsFullAccess IAMFullAccess; do
+  aws iam detach-role-policy \
+    --role-name codebuild-${BUILD_PROJECT}-role \
+    --policy-arn arn:aws:iam::aws:policy/$policy 2>/dev/null || true
+done
+aws iam delete-role --role-name codebuild-${BUILD_PROJECT}-role
+
+# CodePipelineロールのポリシーをデタッチ
+for policy in AWSCodeCommitFullAccess AWSCodeBuildDeveloperAccess AmazonS3FullAccess; do
+  aws iam detach-role-policy \
+    --role-name codepipeline-${PIPELINE_NAME}-role \
+    --policy-arn arn:aws:iam::aws:policy/$policy 2>/dev/null || true
+done
+aws iam delete-role --role-name codepipeline-${PIPELINE_NAME}-role
+
+echo "=== Cleanup completed ==="
+```
+
+> **初学者向け: IAMロールを削除する際の注意**
+>
+> IAMロールにはポリシー（権限設定）がアタッチされています。ロールを削除する前に、すべてのポリシーをデタッチする必要があります。デタッチせずに削除しようとするとエラーになります。
+
+### CDK で作成したリソースの削除
+
+```bash
+# CDKプロジェクトディレクトリで実行
+cd pipeline-cdk
+
+# スタックを削除（確認プロンプトなし）
+npx cdk destroy --force
+
+# または確認プロンプトあり
+npx cdk destroy
+```
+
+> **初学者向け: cdk destroy の仕組み**
+>
+> `cdk destroy` は、CloudFormationスタックを削除します。スタックに含まれるすべてのリソース（CodeCommit、CodeBuild、CodePipeline、IAMロール等）が自動的に削除されます。
+
+### CloudFormation コンソールからの削除
+
+1. [CloudFormationコンソール](https://console.aws.amazon.com/cloudformation/)を開く
+2. 削除したいスタックを選択
+3. 「削除」ボタンをクリック
+4. 確認画面で「スタックの削除」をクリック
+
+### 削除できない場合のトラブルシューティング
+
+| 問題 | 原因 | 解決策 |
+|------|------|--------|
+| S3バケットが削除できない | バケットにオブジェクトが残っている | `aws s3 rm s3://bucket-name --recursive` で中身を削除してから再試行 |
+| IAMロールが削除できない | ポリシーがアタッチされている | すべてのポリシーをデタッチしてから削除 |
+| スタック削除が失敗する | リソースが他から参照されている | 参照元を先に削除、または保持設定を確認 |
+| DELETE_FAILED 状態 | 手動削除済みのリソースがある | コンソールから「保持するリソース」を選択して再削除 |
+
+### S3バケットの中身を削除してからバケットを削除
+
+```bash
+BUCKET_NAME="codepipeline-ap-northeast-1-123456789012"
+
+# バケットの中身を削除
+aws s3 rm s3://${BUCKET_NAME} --recursive
+
+# バージョニングが有効な場合、削除マーカーとバージョンも削除
+aws s3api list-object-versions --bucket ${BUCKET_NAME} --output json | \
+  jq -r '.Versions[]? | "--delete \"Key=\(.Key),VersionId=\(.VersionId)\""' | \
+  xargs -I {} aws s3api delete-objects --bucket ${BUCKET_NAME} --delete '{}'
+
+aws s3api list-object-versions --bucket ${BUCKET_NAME} --output json | \
+  jq -r '.DeleteMarkers[]? | "--delete \"Key=\(.Key),VersionId=\(.VersionId)\""' | \
+  xargs -I {} aws s3api delete-objects --bucket ${BUCKET_NAME} --delete '{}'
+
+# バケットを削除
+aws s3api delete-bucket --bucket ${BUCKET_NAME}
 ```
 
 ---
