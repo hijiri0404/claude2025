@@ -1151,14 +1151,87 @@ Source → Build(検証/合成) → Approval → Deploy(CloudFormation)
 }
 ```
 
-**完全なパイプラインJSON例**（手動承認付き）:
+**手動承認付きパイプライン 完全版一括実行スクリプト**:
+
+> **検証済み**: 2026-02-02 ap-northeast-1 で動作確認済み
 
 ```bash
-cat > /tmp/pipeline-with-approval.json << 'EOF'
+#!/bin/bash
+set -e
+
+# === 変数設定 ===
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=$(aws configure get region)
+ARTIFACT_BUCKET="codepipeline-${REGION}-${ACCOUNT_ID}"
+REPO_NAME="my-approval-repo"
+BUILD_PROJECT="my-approval-build"
+PIPELINE_NAME="my-approval-pipeline"
+
+echo "Account: $ACCOUNT_ID, Region: $REGION"
+
+# === 1. CodeCommitリポジトリ作成 ===
+aws codecommit create-repository --repository-name $REPO_NAME 2>/dev/null || echo "Repository exists"
+
+# === 1.5. リポジトリに初期コミット ===
+REPO_URL=$(aws codecommit get-repository --repository-name $REPO_NAME --query 'repositoryMetadata.cloneUrlHttp' --output text)
+TEMP_DIR=$(mktemp -d)
+cd $TEMP_DIR
+git init
+
+# buildspec.yml（正しい形式で作成）
+cat > buildspec.yml << 'BUILDSPEC'
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - echo "Build started"
+      - echo "Environment is ${ENVIRONMENT:-dev}"
+BUILDSPEC
+
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin $REPO_URL
+git push -u origin main 2>/dev/null || echo "Already pushed"
+cd -
+
+# === 2. IAMロール作成 ===
+# CodeBuildロール
+aws iam create-role \
+  --role-name codebuild-${BUILD_PROJECT}-role \
+  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}' 2>/dev/null || true
+
+# 重要: S3アクセス権限が必要（アーティファクト取得のため）
+aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess 2>/dev/null || true
+aws iam attach-role-policy --role-name codebuild-${BUILD_PROJECT}-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess 2>/dev/null || true
+
+# CodePipelineロール
+aws iam create-role \
+  --role-name codepipeline-${PIPELINE_NAME}-role \
+  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codepipeline.amazonaws.com"},"Action":"sts:AssumeRole"}]}' 2>/dev/null || true
+
+aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AWSCodeCommitFullAccess 2>/dev/null || true
+aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess 2>/dev/null || true
+aws iam attach-role-policy --role-name codepipeline-${PIPELINE_NAME}-role --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess 2>/dev/null || true
+
+echo "Waiting for IAM propagation..."
+sleep 15
+
+# === 3. CodeBuildプロジェクト作成 ===
+aws codebuild create-project \
+  --name $BUILD_PROJECT \
+  --source "type=CODECOMMIT,location=https://git-codecommit.${REGION}.amazonaws.com/v1/repos/${REPO_NAME}" \
+  --environment "type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0" \
+  --service-role "arn:aws:iam::${ACCOUNT_ID}:role/codebuild-${BUILD_PROJECT}-role" \
+  --artifacts "type=NO_ARTIFACTS" 2>/dev/null || echo "Build project exists"
+
+# === 4. 手動承認付きパイプライン作成 ===
+cat > /tmp/pipeline-with-approval.json << EOF
 {
   "pipeline": {
-    "name": "my-pipeline-with-approval",
-    "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/codepipeline-role",
+    "name": "${PIPELINE_NAME}",
+    "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/codepipeline-${PIPELINE_NAME}-role",
     "artifactStore": {"type": "S3", "location": "${ARTIFACT_BUCKET}"},
     "stages": [
       {
@@ -1166,7 +1239,7 @@ cat > /tmp/pipeline-with-approval.json << 'EOF'
         "actions": [{
           "name": "Source",
           "actionTypeId": {"category": "Source", "owner": "AWS", "provider": "CodeCommit", "version": "1"},
-          "configuration": {"RepositoryName": "my-repo", "BranchName": "main", "PollForSourceChanges": "false"},
+          "configuration": {"RepositoryName": "${REPO_NAME}", "BranchName": "main", "PollForSourceChanges": "false"},
           "outputArtifacts": [{"name": "SourceOutput"}]
         }]
       },
@@ -1175,7 +1248,7 @@ cat > /tmp/pipeline-with-approval.json << 'EOF'
         "actions": [{
           "name": "Build",
           "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
-          "configuration": {"ProjectName": "my-build"},
+          "configuration": {"ProjectName": "${BUILD_PROJECT}"},
           "inputArtifacts": [{"name": "SourceOutput"}]
         }]
       },
@@ -1192,7 +1265,7 @@ cat > /tmp/pipeline-with-approval.json << 'EOF'
         "actions": [{
           "name": "Deploy",
           "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
-          "configuration": {"ProjectName": "my-build", "EnvironmentVariables": "[{\"name\":\"ENVIRONMENT\",\"value\":\"prod\",\"type\":\"PLAINTEXT\"}]"},
+          "configuration": {"ProjectName": "${BUILD_PROJECT}", "EnvironmentVariables": "[{\"name\":\"ENVIRONMENT\",\"value\":\"prod\",\"type\":\"PLAINTEXT\"}]"},
           "inputArtifacts": [{"name": "SourceOutput"}]
         }]
       }
@@ -1201,7 +1274,19 @@ cat > /tmp/pipeline-with-approval.json << 'EOF'
   }
 }
 EOF
+
+aws codepipeline create-pipeline --cli-input-json file:///tmp/pipeline-with-approval.json
+
+echo ""
+echo "=== Pipeline created successfully ==="
+echo "Pipeline: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${PIPELINE_NAME}/view"
 ```
+
+> **初学者向け: 重要なポイント**
+>
+> 1. **S3アクセス権限が必須**: CodeBuildロールには `AmazonS3FullAccess` が必要です。パイプラインがアーティファクトをS3経由で受け渡すためです。
+> 2. **buildspec.ymlの形式**: YAMLのインデントを正確に記述してください。空白行があるとエラーになる場合があります。
+> 3. **IAM伝播待機**: ロール作成後は15秒程度待機が必要です。
 
 ### CDK Pipelinesでの手動承認
 
