@@ -1098,6 +1098,172 @@ system-a-infra リポジトリ
             └── prod環境にデプロイ
 ```
 
+### スタックの追加・更新手順
+
+> **検証済み**: 2026-02-02 ap-northeast-1 で動作確認済み
+
+#### ケース1: 既存スタックの更新（例: VPCにサブネット追加）
+
+**必要な作業**: CloudFormationテンプレートの修正のみ
+
+```bash
+# 1. テンプレートを修正
+vi stacks/01-network.yaml
+# PublicSubnet リソースを追加
+
+# 2. 差分を確認
+git diff stacks/01-network.yaml
+
+# 3. コミット & プッシュ
+git add stacks/01-network.yaml
+git commit -m "Add PublicSubnet to network stack"
+git push origin main
+
+# → パイプラインが自動実行され、スタックが更新される
+```
+
+> **ポイント**: `environments/*.json` の更新は不要です。CloudFormationは差分を検出して自動的にリソースを追加/更新します。
+
+#### ケース2: 新規スタックの追加（例: DynamoDB）
+
+**必要な作業**: テンプレート作成 + environments更新 + buildspec.yml更新
+
+```bash
+# 1. 新しいテンプレートを作成
+cat > stacks/06-dynamodb.yaml << 'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB Stack
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  SystemName:
+    Type: String
+    Default: system-a
+
+Resources:
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${SystemName}-${Environment}-users'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  UsersTableName:
+    Value: !Ref UsersTable
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-UsersTableName'
+EOF
+
+# 2. environments/dev.json の stackOrder に追加
+# "stackOrder": ["01-network", "06-dynamodb"]  ← 追加
+vi environments/dev.json
+
+# 3. buildspec.yml にデプロイコマンドを追加（静的版の場合）
+# または、動的版buildspec.ymlを使用（後述）
+
+# 4. 差分確認
+git status
+git diff
+
+# 5. コミット & プッシュ
+git add stacks/06-dynamodb.yaml environments/dev.json buildspec.yml
+git commit -m "Add DynamoDB stack (06-dynamodb.yaml)"
+git push origin main
+
+# → パイプラインが自動実行され、新しいスタックが作成される
+```
+
+#### 動的buildspec.yml（推奨）
+
+`stackOrder` を自動で読み取り、新規スタック追加時に buildspec.yml の修正が不要になります。
+
+```yaml
+version: 0.2
+
+env:
+  variables:
+    ENVIRONMENT: "dev"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - yum install -y jq || true
+
+  pre_build:
+    commands:
+      - export CONFIG_FILE="environments/${ENVIRONMENT}.json"
+      - export STACK_PREFIX=$(jq -r '.stackPrefix' $CONFIG_FILE)
+      - export SYSTEM_NAME=$(jq -r '.systemName' $CONFIG_FILE)
+      - echo "Deploying ${STACK_PREFIX} for environment ${ENVIRONMENT}"
+
+  build:
+    commands:
+      # stackOrderを動的に読み取ってデプロイ
+      - |
+        CONFIG_FILE="environments/${ENVIRONMENT}.json"
+        STACK_PREFIX=$(jq -r '.stackPrefix' $CONFIG_FILE)
+        SYSTEM_NAME=$(jq -r '.systemName' $CONFIG_FILE)
+
+        for STACK in $(jq -r '.stackOrder[]' $CONFIG_FILE); do
+          echo "=== Deploying ${STACK} ==="
+          TEMPLATE_FILE="stacks/${STACK}.yaml"
+          STACK_NAME="${STACK_PREFIX}-${STACK#*-}"
+
+          if [ -f "$TEMPLATE_FILE" ]; then
+            aws cloudformation deploy \
+              --template-file $TEMPLATE_FILE \
+              --stack-name $STACK_NAME \
+              --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+              --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+              --no-fail-on-empty-changeset
+          else
+            echo "WARNING: Template not found: $TEMPLATE_FILE"
+          fi
+        done
+
+  post_build:
+    commands:
+      - echo "All stacks deployed for ${ENVIRONMENT}"
+```
+
+**動的版を使う場合の新規スタック追加手順**:
+
+```bash
+# 1. テンプレート作成
+cat > stacks/06-dynamodb.yaml << 'EOF'
+# ... (テンプレート内容)
+EOF
+
+# 2. environments/dev.json の stackOrder に追加のみ
+jq '.stackOrder += ["06-dynamodb"]' environments/dev.json > tmp.json && mv tmp.json environments/dev.json
+
+# 3. コミット & プッシュ（buildspec.ymlの修正不要！）
+git add stacks/06-dynamodb.yaml environments/dev.json
+git commit -m "Add DynamoDB stack"
+git push origin main
+```
+
+#### 更新手順の比較表
+
+| 操作 | 静的buildspec.yml | 動的buildspec.yml（推奨） |
+|------|------------------|-------------------------|
+| 既存スタック更新 | テンプレートのみ修正 | テンプレートのみ修正 |
+| 新規スタック追加 | テンプレート + environments + buildspec.yml | テンプレート + environments のみ |
+| スタック削除 | buildspec.yml修正が必要 | environments から削除のみ |
+
 ---
 
 ## Deployステージと手動承認
