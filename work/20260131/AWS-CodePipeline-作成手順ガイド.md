@@ -568,32 +568,35 @@ aws s3api create-bucket \
 # === 5. CodePipeline作成 ===
 # ↓ パイプラインの設定をJSONファイルとして作成
 #   JSONは設定を記述するためのデータ形式
+#   重要: "pipeline"キーでラップする必要がある
 cat > /tmp/pipeline.json << EOF
 {
-  "name": "${PIPELINE_NAME}",
-  "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/codepipeline-${PIPELINE_NAME}-role",
-  "artifactStore": {"type": "S3", "location": "${ARTIFACT_BUCKET}"},
-  "stages": [
-    {
-      "name": "Source",
-      "actions": [{
+  "pipeline": {
+    "name": "${PIPELINE_NAME}",
+    "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/codepipeline-${PIPELINE_NAME}-role",
+    "artifactStore": {"type": "S3", "location": "${ARTIFACT_BUCKET}"},
+    "stages": [
+      {
         "name": "Source",
-        "actionTypeId": {"category": "Source", "owner": "AWS", "provider": "CodeCommit", "version": "1"},
-        "configuration": {"RepositoryName": "${REPO_NAME}", "BranchName": "main", "PollForSourceChanges": "false"},
-        "outputArtifacts": [{"name": "SourceOutput"}]
-      }]
-    },
-    {
-      "name": "Build",
-      "actions": [{
+        "actions": [{
+          "name": "Source",
+          "actionTypeId": {"category": "Source", "owner": "AWS", "provider": "CodeCommit", "version": "1"},
+          "configuration": {"RepositoryName": "${REPO_NAME}", "BranchName": "main", "PollForSourceChanges": "false"},
+          "outputArtifacts": [{"name": "SourceOutput"}]
+        }]
+      },
+      {
         "name": "Build",
-        "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
-        "configuration": {"ProjectName": "${BUILD_PROJECT}"},
-        "inputArtifacts": [{"name": "SourceOutput"}]
-      }]
-    }
-  ],
-  "pipelineType": "V2"
+        "actions": [{
+          "name": "Build",
+          "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
+          "configuration": {"ProjectName": "${BUILD_PROJECT}"},
+          "inputArtifacts": [{"name": "SourceOutput"}]
+        }]
+      }
+    ],
+    "pipelineType": "V2"
+  }
 }
 EOF
 
@@ -608,15 +611,19 @@ echo "Pipeline: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/
 
 > **初学者向け: パイプラインJSONの構造**
 >
+> **重要**: `--cli-input-json`を使う場合、必ず`"pipeline"`キーでラップする必要があります。
+>
 > ```
 > {
->   "name": "パイプライン名",
->   "roleArn": "パイプラインが使うIAMロール",
->   "artifactStore": "一時ファイル保存先（S3）",
->   "stages": [
->     { "name": "Source",  ... },  ← 1つ目のステージ
->     { "name": "Build",   ... }   ← 2つ目のステージ
->   ]
+>   "pipeline": {           ← このキーが必須！
+>     "name": "パイプライン名",
+>     "roleArn": "パイプラインが使うIAMロール",
+>     "artifactStore": "一時ファイル保存先（S3）",
+>     "stages": [
+>       { "name": "Source",  ... },  ← 1つ目のステージ
+>       { "name": "Build",   ... }   ← 2つ目のステージ
+>     ]
+>   }
 > }
 > ```
 >
@@ -844,6 +851,8 @@ cdk deploy
 ---
 
 ## 推奨構成: マルチシステム・マルチ環境
+
+> **検証済み**: 2026-02-02 ap-northeast-1 でCloudFormationスタック（01-network.yaml）の動作確認済み
 
 複数システム（system-a, system-b）を複数環境（dev, stg, prod）で管理する構成です。
 
@@ -1085,6 +1094,10 @@ Source → Build(検証/合成) → Approval → Deploy(CloudFormation)
 
 ### CLIでの手動承認ステージ追加
 
+> **検証済み**: 2026-02-02 ap-northeast-1 で動作確認済み
+
+以下のJSON（ステージ定義）を `stages` 配列に追加します:
+
 ```json
 {
   "name": "Approval",
@@ -1101,6 +1114,58 @@ Source → Build(検証/合成) → Approval → Deploy(CloudFormation)
     }
   }]
 }
+```
+
+**完全なパイプラインJSON例**（手動承認付き）:
+
+```bash
+cat > /tmp/pipeline-with-approval.json << 'EOF'
+{
+  "pipeline": {
+    "name": "my-pipeline-with-approval",
+    "roleArn": "arn:aws:iam::${ACCOUNT_ID}:role/codepipeline-role",
+    "artifactStore": {"type": "S3", "location": "${ARTIFACT_BUCKET}"},
+    "stages": [
+      {
+        "name": "Source",
+        "actions": [{
+          "name": "Source",
+          "actionTypeId": {"category": "Source", "owner": "AWS", "provider": "CodeCommit", "version": "1"},
+          "configuration": {"RepositoryName": "my-repo", "BranchName": "main", "PollForSourceChanges": "false"},
+          "outputArtifacts": [{"name": "SourceOutput"}]
+        }]
+      },
+      {
+        "name": "Build",
+        "actions": [{
+          "name": "Build",
+          "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
+          "configuration": {"ProjectName": "my-build"},
+          "inputArtifacts": [{"name": "SourceOutput"}]
+        }]
+      },
+      {
+        "name": "Approval",
+        "actions": [{
+          "name": "ManualApproval",
+          "actionTypeId": {"category": "Approval", "owner": "AWS", "provider": "Manual", "version": "1"},
+          "configuration": {"CustomData": "本番環境へのデプロイを承認してください"}
+        }]
+      },
+      {
+        "name": "Deploy",
+        "actions": [{
+          "name": "Deploy",
+          "actionTypeId": {"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1"},
+          "configuration": {"ProjectName": "my-build", "EnvironmentVariables": "[{\"name\":\"ENVIRONMENT\",\"value\":\"prod\",\"type\":\"PLAINTEXT\"}]"},
+          "inputArtifacts": [{"name": "SourceOutput"}]
+        }]
+      }
+    ],
+    "pipelineType": "V2"
+  }
+}
+EOF
 ```
 
 ### CDK Pipelinesでの手動承認
