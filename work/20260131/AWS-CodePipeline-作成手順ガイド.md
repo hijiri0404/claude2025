@@ -516,6 +516,41 @@ echo "Account: $ACCOUNT_ID, Region: $REGION"
 #   「2>/dev/null || echo ...」はエラーを無視して続行するおまじない
 aws codecommit create-repository --repository-name $REPO_NAME 2>/dev/null || echo "Repository already exists"
 
+# === 1.5. リポジトリに初期コミット（重要！） ===
+# ↓ 空のリポジトリではパイプラインが動作しないため、mainブランチを作成
+#   この手順をスキップすると「no branch named main」エラーが発生
+REPO_URL=$(aws codecommit get-repository --repository-name $REPO_NAME --query 'repositoryMetadata.cloneUrlHttp' --output text)
+TEMP_DIR=$(mktemp -d)
+cd $TEMP_DIR
+
+# buildspec.ymlを作成（パイプラインに必須）
+cat > buildspec.yml << 'BUILDSPEC'
+version: 0.2
+phases:
+  build:
+    commands:
+      - echo "Build started"
+      - aws cloudformation deploy --template-file template.yaml --stack-name my-infra-stack --no-fail-on-empty-changeset || echo "Skipped"
+BUILDSPEC
+
+# サンプルテンプレート作成
+cat > template.yaml << 'TEMPLATE'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sample Stack
+Resources:
+  DummyWaitHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+TEMPLATE
+
+# Gitリポジトリを初期化してプッシュ
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin $REPO_URL
+git push -u origin main
+cd - > /dev/null
+
 # === 2. IAMロール作成 ===
 # ↓ CodeBuild用のIAMロールを作成
 #   IAMロール = サービスに付与する権限の入れ物
