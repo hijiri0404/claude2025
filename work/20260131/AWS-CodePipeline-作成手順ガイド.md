@@ -4,14 +4,19 @@
 
 ## 目次
 
-1. [はじめに（初学者向け）](#はじめに初学者向け)
-2. [クイックスタート](#クイックスタート)
-3. [アーキテクチャ概要](#アーキテクチャ概要)
-4. [前提条件](#前提条件)
-5. [作成方法1: マネジメントコンソール（GUI）](#作成方法1-マネジメントコンソールgui)
-6. [作成方法2: AWS CLI](#作成方法2-aws-cli) **[検証済]**
-7. [作成方法3: AWS CDK（推奨）](#作成方法3-aws-cdk推奨) **[検証済]**
-8. [推奨構成: マルチシステム・マルチ環境](#推奨構成-マルチシステムマルチ環境)
+### 基礎編（初学者向け）
+1. [はじめに（初学者向け）](#はじめに初学者向け) - CI/CDの基本概念
+2. [クイックスタート](#クイックスタート) - 最速で動くパイプラインを構築
+3. [アーキテクチャ概要](#アーキテクチャ概要) - 全体像の理解
+4. [前提条件](#前提条件) - 事前準備
+
+### 構築編
+5. [作成方法1: マネジメントコンソール（GUI）](#作成方法1-マネジメントコンソールgui) - 学習向け
+6. [作成方法2: AWS CLI](#作成方法2-aws-cli) **[検証済]** - 自動化の第一歩
+7. [作成方法3: AWS CDK（推奨）](#作成方法3-aws-cdk推奨) **[検証済]** - 本番環境向け
+8. [推奨構成: マルチシステム・マルチ環境](#推奨構成-マルチシステムマルチ環境) **[検証済]**
+
+### 運用編
 9. [Deployステージと手動承認](#deployステージと手動承認)
 10. [運用監視とセキュリティ](#運用監視とセキュリティ)
 11. [実践運用ガイド](#実践運用ガイド)
@@ -23,10 +28,18 @@
     - [マルチアカウントデプロイ](#マルチアカウントデプロイ)
     - [障害対応手順](#障害対応手順)
     - [アーティファクト管理](#アーティファクト管理)
-12. [クリーンアップ](#クリーンアップ)
-13. [トラブルシューティング](#トラブルシューティング)
-14. [ベストプラクティス](#ベストプラクティス)
-15. [用語集](#用語集)
+
+### DOP試験対策（上級者向け）
+12. [デプロイ戦略](#デプロイ戦略dop試験重要) - Blue/Green, Canary, Rolling
+13. [マルチアカウント・マルチリージョン戦略](#マルチアカウントマルチリージョン戦略dop試験重要)
+
+### リファレンス
+14. [クリーンアップ](#クリーンアップ)
+15. [トラブルシューティング](#トラブルシューティング)
+16. [ベストプラクティス（DOP試験チェックリスト）](#ベストプラクティスdop試験チェックリスト)
+17. [用語集](#用語集)
+18. [参考リンク](#参考リンク)
+19. [初学者向けFAQ](#初学者向けfaq)
 
 ---
 
@@ -1038,50 +1051,98 @@ aws codebuild create-project \
 
 ### スタック例: 01-network.yaml
 
+> **初学者向け: CloudFormationテンプレートの読み方**
+>
+> このYAMLファイルは「こんなAWSリソースを作ってください」という設計図です。
+> 主要なセクションは以下の通りです：
+>
+> | セクション | 役割 | 必須？ |
+> |-----------|------|--------|
+> | `Parameters` | 外から渡される変数（環境名など） | △ |
+> | `Conditions` | 条件分岐の定義 | △ |
+> | `Resources` | 作成するAWSリソース | ○ |
+> | `Outputs` | 作成後に出力する値 | △ |
+
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Network Stack - VPC, Subnets
 
+# ========================================
+# Parameters: 外部から渡される値
+# ========================================
+# buildspec.yml の --parameter-overrides で値を渡す
+# 例: --parameter-overrides Environment=dev SystemName=system-a
 Parameters:
   Environment:
     Type: String
-    AllowedValues: [dev, stg, prod]
+    AllowedValues: [dev, stg, prod]  # この3つの値のみ許可
   SystemName:
     Type: String
-    Default: system-a
+    Default: system-a  # 渡されなかった場合のデフォルト値
 
+# ========================================
+# Conditions: 条件分岐の定義
+# ========================================
+# 「この条件がtrueのとき」という判定を定義
+# Resources セクションで !If [条件名, trueの値, falseの値] として使う
+Conditions:
+  # Environment が 'prod' なら true
+  IsProd: !Equals [!Ref Environment, prod]
+  # Environment が 'stg' なら true
+  IsStg: !Equals [!Ref Environment, stg]
+
+# ========================================
+# Resources: 作成するAWSリソース
+# ========================================
 Resources:
   VPC:
-    Type: AWS::EC2::VPC
+    Type: AWS::EC2::VPC  # リソースタイプ（何を作るか）
     Properties:
+      # !If [条件, trueの値, falseの値] で環境ごとにCIDRを変える
+      # prod → 10.0.0.0/16
+      # stg  → 10.1.0.0/16
+      # dev  → 10.2.0.0/16（上記以外）
       CidrBlock: !If [IsProd, 10.0.0.0/16, !If [IsStg, 10.1.0.0/16, 10.2.0.0/16]]
       EnableDnsHostnames: true
       EnableDnsSupport: true
       Tags:
         - Key: Name
+          # !Sub で変数を埋め込み → 'system-a-dev-vpc' のような名前になる
           Value: !Sub '${SystemName}-${Environment}-vpc'
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !Ref VPC  # 上で作ったVPCを参照
       CidrBlock: !If [IsProd, 10.0.1.0/24, !If [IsStg, 10.1.1.0/24, 10.2.1.0/24]]
+      # !GetAZs '' で現在リージョンのAZリストを取得、[0]で最初のAZを選択
       AvailabilityZone: !Select [0, !GetAZs '']
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: true  # このサブネットに作成したインスタンスにパブリックIPを付与
       Tags:
         - Key: Name
           Value: !Sub '${SystemName}-${Environment}-public-1'
 
-Conditions:
-  IsProd: !Equals [!Ref Environment, prod]
-  IsStg: !Equals [!Ref Environment, stg]
-
+# ========================================
+# Outputs: 他のスタックから参照できる値
+# ========================================
+# Export で名前を付けると、他のスタックから !ImportValue で参照可能
 Outputs:
   VpcId:
-    Value: !Ref VPC
+    Value: !Ref VPC  # 作成されたVPCのIDを出力
     Export:
-      Name: !Sub '${SystemName}-${Environment}-VpcId'
+      Name: !Sub '${SystemName}-${Environment}-VpcId'  # エクスポート名
+      # 他のスタックで !ImportValue 'system-a-dev-VpcId' として参照
 ```
+
+> **初学者向け: よく使う組み込み関数**
+>
+> | 関数 | 説明 | 例 |
+> |------|------|-----|
+> | `!Ref` | パラメータやリソースの値を参照 | `!Ref VPC` |
+> | `!Sub` | 文字列に変数を埋め込み | `!Sub '${Name}-vpc'` |
+> | `!If` | 条件分岐 | `!If [IsProd, 大, 小]` |
+> | `!GetAtt` | リソースの属性を取得 | `!GetAtt Bucket.Arn` |
+> | `!ImportValue` | 他スタックのOutputを参照 | `!ImportValue VpcId` |
 
 ### 環境別デプロイフロー
 
@@ -2759,6 +2820,601 @@ aws s3api delete-bucket --bucket ${BUCKET_NAME}
 
 ---
 
+## デプロイ戦略（DOP試験重要）
+
+> **DOP-C02 出題範囲**: デプロイ戦略の選択と実装は試験で頻出のトピックです。
+> 各戦略のメリット・デメリット、ユースケースを理解しておきましょう。
+
+### デプロイ戦略の比較
+
+| 戦略 | ダウンタイム | ロールバック速度 | リソースコスト | 複雑さ | ユースケース |
+|------|-------------|-----------------|---------------|--------|-------------|
+| **In-Place** | あり | 遅い | 低 | 低 | 開発環境 |
+| **Rolling** | 最小限 | 中程度 | 低 | 中 | 内部ツール |
+| **Blue/Green** | なし | 即時 | 高（2倍） | 中 | 本番環境（推奨） |
+| **Canary** | なし | 即時 | 中 | 高 | 大規模サービス |
+| **Linear** | なし | 中程度 | 中 | 高 | 段階的移行 |
+
+> **初学者向け: どれを選ぶ？**
+> - 迷ったら **Blue/Green** を選択（最も安全）
+> - コスト重視なら **Rolling**
+> - 大規模で慎重に進めたいなら **Canary**
+
+### Blue/Green デプロイ
+
+新旧2つの環境を用意し、トラフィックを一気に切り替える戦略です。
+
+```
+        ┌─────────────────────────────────────────────────────────┐
+        │                   Blue/Green デプロイ                    │
+        ├─────────────────────────────────────────────────────────┤
+        │                                                          │
+        │   デプロイ前:                                            │
+        │   ┌─────────────┐                                       │
+        │   │   Route 53  │                                       │
+        │   └──────┬──────┘                                       │
+        │          │ 100%                                         │
+        │          ▼                                               │
+        │   ┌─────────────┐        ┌─────────────┐               │
+        │   │  Blue (v1)  │        │ Green (v2)  │ ← 新バージョン │
+        │   │   現行環境   │        │  待機中     │   デプロイ完了 │
+        │   └─────────────┘        └─────────────┘               │
+        │                                                          │
+        │   切り替え後:                                            │
+        │   ┌─────────────┐                                       │
+        │   │   Route 53  │                                       │
+        │   └──────┬──────┘                                       │
+        │          │ 100%                                         │
+        │          ▼                                               │
+        │   ┌─────────────┐        ┌─────────────┐               │
+        │   │  Blue (v1)  │        │ Green (v2)  │               │
+        │   │   待機中     │        │   本番稼働   │               │
+        │   └─────────────┘        └─────────────┘               │
+        └─────────────────────────────────────────────────────────┘
+```
+
+**メリット**:
+- ダウンタイムゼロ
+- 即時ロールバック可能（DNS切り替えのみ）
+- 本番同等環境で事前テスト可能
+
+**デメリット**:
+- リソースコストが2倍
+- データベーススキーマ変更が複雑
+
+**CloudFormation での Blue/Green（ALB + Auto Scaling）**:
+
+```yaml
+# blue-green-stack.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Blue/Green deployment with ALB
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [blue, green]
+  ImageTag:
+    Type: String
+    Description: Container image tag for deployment
+
+Resources:
+  # ターゲットグループ（Blue/Green それぞれ作成）
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-${Environment}-tg'
+      Port: 80
+      Protocol: HTTP
+      VpcId: !ImportValue VpcId
+      HealthCheckPath: /health
+      # ヘルスチェックの設定（重要）
+      HealthCheckIntervalSeconds: 10      # チェック間隔
+      HealthyThresholdCount: 2            # 正常判定回数
+      UnhealthyThresholdCount: 3          # 異常判定回数
+      HealthCheckTimeoutSeconds: 5        # タイムアウト
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${AWS::StackName}-${Environment}-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 10
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      VPCZoneIdentifier: !Split
+        - ','
+        - !ImportValue PrivateSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-${Environment}'
+          PropagateAtLaunch: true
+
+Outputs:
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-${Environment}-tg-arn'
+```
+
+**CodeDeploy Blue/Green 設定**:
+
+```bash
+# Blue/Green デプロイグループの作成
+aws deploy create-deployment-group \
+  --application-name MyApp \
+  --deployment-group-name prod-blue-green \
+  --deployment-config-name CodeDeployDefault.AllAtOnce \
+  --service-role-arn arn:aws:iam::${ACCOUNT_ID}:role/CodeDeployRole \
+  --deployment-style "deploymentType=BLUE_GREEN,deploymentOption=WITH_TRAFFIC_CONTROL" \
+  --blue-green-deployment-configuration '{
+    "terminateBlueInstancesOnDeploymentSuccess": {
+      "action": "TERMINATE",
+      "terminationWaitTimeInMinutes": 60
+    },
+    "deploymentReadyOption": {
+      "actionOnTimeout": "CONTINUE_DEPLOYMENT",
+      "waitTimeInMinutes": 0
+    },
+    "greenFleetProvisioningOption": {
+      "action": "COPY_AUTO_SCALING_GROUP"
+    }
+  }' \
+  --auto-scaling-groups prod-asg \
+  --load-balancer-info "targetGroupInfoList=[{name=prod-tg}]"
+```
+
+### Canary デプロイ
+
+トラフィックの一部（例: 10%）を新バージョンに流し、問題がなければ段階的に増やす戦略です。
+
+```
+        ┌─────────────────────────────────────────────────────────┐
+        │                   Canary デプロイ                        │
+        ├─────────────────────────────────────────────────────────┤
+        │                                                          │
+        │   Step 1: 10% を新バージョンに                           │
+        │   ┌─────────────┐                                       │
+        │   │     ALB     │                                       │
+        │   └──────┬──────┘                                       │
+        │      90% │ 10%                                          │
+        │          ├──────────────┐                               │
+        │          ▼              ▼                                │
+        │   ┌──────────┐   ┌──────────┐                          │
+        │   │ v1 (90%) │   │ v2 (10%) │ ← Canary                 │
+        │   └──────────┘   └──────────┘                          │
+        │                                                          │
+        │   Step 2: メトリクス確認 → 問題なければ比率を増加        │
+        │                                                          │
+        │   Step 3: 100% 切り替え完了                              │
+        │   ┌─────────────┐                                       │
+        │   │     ALB     │                                       │
+        │   └──────┬──────┘                                       │
+        │          │ 100%                                         │
+        │          ▼                                               │
+        │   ┌──────────┐   ┌──────────┐                          │
+        │   │ v1 (終了) │   │v2 (100%)│                          │
+        │   └──────────┘   └──────────┘                          │
+        └─────────────────────────────────────────────────────────┘
+```
+
+**CodeDeploy Canary 設定**:
+
+```bash
+# Canary デプロイ設定（10%から開始、5分後に100%）
+aws deploy create-deployment-config \
+  --deployment-config-name Canary10Percent5Minutes \
+  --traffic-routing-config '{
+    "type": "TimeBasedCanary",
+    "timeBasedCanary": {
+      "canaryPercentage": 10,
+      "canaryInterval": 5
+    }
+  }'
+
+# Linear デプロイ設定（10分ごとに10%ずつ増加）
+aws deploy create-deployment-config \
+  --deployment-config-name Linear10PercentEvery10Minutes \
+  --traffic-routing-config '{
+    "type": "TimeBasedLinear",
+    "timeBasedLinear": {
+      "linearPercentage": 10,
+      "linearInterval": 10
+    }
+  }'
+```
+
+**Lambda の Canary デプロイ（SAM）**:
+
+```yaml
+# template.yaml (SAM)
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  MyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs20.x
+      # Canary デプロイ設定
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes  # 10%で5分、その後100%
+        Alarms:
+          - !Ref ErrorAlarm
+          - !Ref LatencyAlarm
+        Hooks:
+          PreTraffic: !Ref PreTrafficHook    # トラフィック切り替え前のテスト
+          PostTraffic: !Ref PostTrafficHook  # トラフィック切り替え後のテスト
+
+  # エラー率監視アラーム
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-error-rate'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MyFunction
+```
+
+### Rolling デプロイ
+
+インスタンスを順番に更新していく戦略です。
+
+```bash
+# CloudFormation での Rolling Update 設定
+# Auto Scaling Group の UpdatePolicy を使用
+
+# stack.yaml
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    # Rolling Update の設定
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 2       # 最低稼働インスタンス数
+        MaxBatchSize: 1                # 同時に更新する最大数
+        PauseTime: PT5M                # 更新間の待機時間（5分）
+        WaitOnResourceSignals: true    # シグナル待ち
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+    Properties:
+      MinSize: 2
+      MaxSize: 10
+      DesiredCapacity: 4
+```
+
+### 変更セット（Change Set）の活用
+
+> **DOP試験ポイント**: 変更セットは本番環境でのデプロイ前確認に必須の機能です。
+
+```bash
+# ========================================
+# 変更セットのワークフロー
+# ========================================
+
+# 1. 変更セットの作成（プレビュー）
+# 実際には何も変更されない。変更内容を確認できる
+aws cloudformation create-change-set \
+  --stack-name my-prod-stack \
+  --template-body file://template.yaml \
+  --change-set-name deploy-v2-$(date +%Y%m%d%H%M%S) \
+  --description "Add new Lambda function" \
+  --capabilities CAPABILITY_IAM
+
+# 2. 変更内容の確認
+# どのリソースが追加/変更/削除されるかを確認
+aws cloudformation describe-change-set \
+  --stack-name my-prod-stack \
+  --change-set-name deploy-v2-20260202120000 \
+  --query 'Changes[].{
+    Action: ResourceChange.Action,
+    LogicalId: ResourceChange.LogicalResourceId,
+    ResourceType: ResourceChange.ResourceType,
+    Replacement: ResourceChange.Replacement
+  }' \
+  --output table
+
+# 出力例:
+# +--------+------------------+----------------------+-------------+
+# | Action | LogicalId        | ResourceType         | Replacement |
+# +--------+------------------+----------------------+-------------+
+# | Add    | NewLambda        | AWS::Lambda::Function| None        |
+# | Modify | ExistingBucket   | AWS::S3::Bucket      | False       |
+# +--------+------------------+----------------------+-------------+
+
+# 3. 変更セットの実行（本番反映）
+# 確認後、問題なければ実行
+aws cloudformation execute-change-set \
+  --stack-name my-prod-stack \
+  --change-set-name deploy-v2-20260202120000
+
+# 4. または、変更セットの削除（キャンセル）
+# 問題がある場合は削除
+aws cloudformation delete-change-set \
+  --stack-name my-prod-stack \
+  --change-set-name deploy-v2-20260202120000
+```
+
+**buildspec.yml での変更セット活用**:
+
+```yaml
+# buildspec.yml - 本番環境向け（変更セット使用）
+version: 0.2
+
+env:
+  variables:
+    STACK_NAME: "my-prod-stack"
+
+phases:
+  build:
+    commands:
+      # 変更セットを作成
+      - CHANGE_SET_NAME="deploy-$(date +%Y%m%d%H%M%S)"
+      - |
+        aws cloudformation create-change-set \
+          --stack-name ${STACK_NAME} \
+          --template-body file://template.yaml \
+          --change-set-name ${CHANGE_SET_NAME} \
+          --capabilities CAPABILITY_IAM
+
+      # 変更セットの作成完了を待機
+      - aws cloudformation wait change-set-create-complete \
+          --stack-name ${STACK_NAME} \
+          --change-set-name ${CHANGE_SET_NAME}
+
+      # 変更内容を出力（手動承認ステージで確認用）
+      - echo "=== Change Set Details ==="
+      - aws cloudformation describe-change-set \
+          --stack-name ${STACK_NAME} \
+          --change-set-name ${CHANGE_SET_NAME}
+
+artifacts:
+  files:
+    - change-set-name.txt
+  commands:
+    - echo ${CHANGE_SET_NAME} > change-set-name.txt
+```
+
+### CodePipeline V2 の機能（DOP試験重要）
+
+> **DOP試験ポイント**: V2 パイプラインの新機能を理解しておくことが重要です。
+
+**V1 vs V2 の比較**:
+
+| 機能 | V1 | V2 |
+|------|-----|-----|
+| トリガーの種類 | ポーリング | イベントベース（推奨） |
+| Git タグトリガー | × | ○ |
+| プルリクエストトリガー | × | ○ |
+| 変数の受け渡し | 制限あり | 強化 |
+| パイプライン変数 | × | ○ |
+| 料金 | アクション単位 | パイプライン単位 |
+
+**V2 固有の機能: トリガーフィルター**:
+
+```typescript
+// CDK での V2 パイプライン（トリガーフィルター付き）
+import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
+import * as codepipeline_actions from 'aws-cdk-lib/aws-codepipeline-actions';
+
+const pipeline = new codepipeline.Pipeline(this, 'Pipeline', {
+  pipelineName: 'my-v2-pipeline',
+  pipelineType: codepipeline.PipelineType.V2,  // V2 を明示的に指定
+
+  // V2 固有: トリガー設定
+  triggers: [{
+    providerType: codepipeline.ProviderType.CODE_STAR_SOURCE_CONNECTION,
+    gitConfiguration: {
+      sourceAction: sourceAction,
+      // プッシュイベントでトリガー（タグフィルター）
+      pushFilter: [{
+        tagsIncludes: ['release-*', 'v*'],  // release-* または v* タグでトリガー
+        tagsExcludes: ['test-*'],           // test-* タグは除外
+      }],
+      // プルリクエストイベントでトリガー
+      pullRequestFilter: [{
+        branchesIncludes: ['main', 'develop'],
+        events: ['OPEN', 'UPDATED'],  // PR オープン/更新時
+      }],
+    },
+  }],
+});
+```
+
+**V2 パイプライン変数**:
+
+```yaml
+# buildspec.yml で V2 変数を設定
+version: 0.2
+
+env:
+  exported-variables:
+    - BUILD_VERSION
+    - COMMIT_HASH
+
+phases:
+  build:
+    commands:
+      - export BUILD_VERSION=$(date +%Y%m%d.%H%M%S)
+      - export COMMIT_HASH=$(git rev-parse --short HEAD)
+      - echo "Build Version: ${BUILD_VERSION}"
+
+# 後続のステージで #{ビルドアクション名.BUILD_VERSION} として参照可能
+```
+
+---
+
+## マルチアカウント・マルチリージョン戦略（DOP試験重要）
+
+> **DOP試験ポイント**: エンタープライズ環境でのCI/CDパイプライン設計は頻出です。
+
+### マルチアカウント構成パターン
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     マルチアカウント CI/CD 構成                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────────┐                                                   │
+│  │ Tools Account    │  ← パイプライン・ビルドリソースを集中管理         │
+│  │ (111111111111)   │                                                   │
+│  ├──────────────────┤                                                   │
+│  │ - CodePipeline   │                                                   │
+│  │ - CodeBuild      │                                                   │
+│  │ - Artifacts S3   │                                                   │
+│  │ - KMS Key        │                                                   │
+│  └────────┬─────────┘                                                   │
+│           │ AssumeRole                                                  │
+│           ├──────────────────────────────────────┐                      │
+│           ▼                                      ▼                       │
+│  ┌──────────────────┐              ┌──────────────────┐                │
+│  │ Dev Account      │              │ Prod Account     │                │
+│  │ (222222222222)   │              │ (333333333333)   │                │
+│  ├──────────────────┤              ├──────────────────┤                │
+│  │ - Deploy Role    │              │ - Deploy Role    │                │
+│  │ - CFn Stacks     │              │ - CFn Stacks     │                │
+│  │ - App Resources  │              │ - App Resources  │                │
+│  └──────────────────┘              └──────────────────┘                │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**クロスアカウントロールの設定**:
+
+```yaml
+# prod-account-role.yaml（本番アカウントにデプロイ）
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cross-account deployment role for CodePipeline
+
+Parameters:
+  ToolsAccountId:
+    Type: String
+    Description: AWS Account ID of the tools account
+
+Resources:
+  CrossAccountDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CrossAccountDeployRole
+      # Toolsアカウントからの AssumeRole を許可
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ToolsAccountId}:root'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': 'CodePipelineDeployment'
+
+      # デプロイに必要な権限
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCloudFormationFullAccess'
+
+      Policies:
+        - PolicyName: DeploymentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 アーティファクトへのアクセス
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                Resource:
+                  - !Sub 'arn:aws:s3:::codepipeline-${AWS::Region}-${ToolsAccountId}/*'
+
+              # KMS キーの使用（暗号化されたアーティファクト）
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                  - 'kms:DescribeKey'
+                Resource:
+                  - !Sub 'arn:aws:kms:${AWS::Region}:${ToolsAccountId}:key/*'
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt CrossAccountDeployRole.Arn
+    Description: Use this ARN in CodePipeline's Deploy action
+```
+
+**KMS キーポリシー（Toolsアカウント）**:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Enable IAM policies",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::111111111111:root"},
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "Allow cross-account decrypt",
+      "Effect": "Allow",
+      "Principal": {"AWS": [
+        "arn:aws:iam::222222222222:role/CrossAccountDeployRole",
+        "arn:aws:iam::333333333333:role/CrossAccountDeployRole"
+      ]},
+      "Action": ["kms:Decrypt", "kms:DescribeKey"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### マルチリージョン構成
+
+```bash
+# プライマリリージョンからセカンダリリージョンへの複製
+
+# 1. セカンダリリージョン用の S3 バケット（アーティファクト）
+aws s3 mb s3://codepipeline-artifacts-us-west-2 --region us-west-2
+
+# 2. クロスリージョンレプリケーションの設定
+aws s3api put-bucket-replication \
+  --bucket codepipeline-artifacts-ap-northeast-1 \
+  --replication-configuration '{
+    "Role": "arn:aws:iam::111111111111:role/S3ReplicationRole",
+    "Rules": [{
+      "Status": "Enabled",
+      "Priority": 1,
+      "Filter": {"Prefix": ""},
+      "Destination": {
+        "Bucket": "arn:aws:s3:::codepipeline-artifacts-us-west-2",
+        "ReplicationTime": {"Status": "Enabled", "Time": {"Minutes": 15}},
+        "Metrics": {"Status": "Enabled", "EventThreshold": {"Minutes": 15}}
+      },
+      "DeleteMarkerReplication": {"Status": "Disabled"}
+    }]
+  }'
+```
+
+---
+
 ## トラブルシューティング
 
 > **初学者向け: エラーが出ても慌てない**
@@ -2817,47 +3473,154 @@ commands:
 
 ---
 
-## ベストプラクティス
+## ベストプラクティス（DOP試験チェックリスト）
 
-### セキュリティ
+> **DOP試験ポイント**: 以下の項目は試験で頻出です。各項目の「なぜ」を理解しておきましょう。
 
-| 項目 | 推奨 |
-|------|------|
-| ブランチ保護 | mainへの直接push禁止 |
-| 手動承認 | 本番デプロイ前に必須 |
-| 静的解析 | cfn-lint, cdk-nag組み込み |
-| シークレット | Secrets Manager使用 |
-| 最小権限 | 必要最小限のIAM権限 |
+### セキュリティ（最重要）
+
+| 項目 | 推奨 | なぜ重要？ |
+|------|------|-----------|
+| **ブランチ保護** | mainへの直接push禁止 | コードレビューなしの変更を防ぐ |
+| **手動承認** | 本番デプロイ前に必須 | 意図しない本番変更を防ぐ |
+| **静的解析** | cfn-lint, cdk-nag組み込み | セキュリティ問題を早期発見 |
+| **シークレット管理** | Secrets Manager / Parameter Store使用 | 認証情報の漏洩を防ぐ |
+| **最小権限** | 必要最小限のIAM権限 | 侵害時の被害を最小化 |
+| **暗号化** | KMS でアーティファクト暗号化 | 機密コードの保護 |
+| **監査ログ** | CloudTrail有効化 | 誰が何をしたか追跡可能に |
+
+**セキュリティチェックリスト（本番前確認）**:
+
+```bash
+# 1. シークレットがソースコードに含まれていないか確認
+git secrets --scan
+
+# 2. CloudFormation テンプレートのセキュリティチェック
+cfn-lint template.yaml
+checkov -f template.yaml --framework cloudformation
+
+# 3. 依存関係の脆弱性チェック
+npm audit --audit-level=high    # Node.js
+pip audit                        # Python
+```
+
+### パフォーマンス最適化
+
+| 項目 | 推奨 | 効果 |
+|------|------|------|
+| **キャッシュ活用** | ビルドキャッシュをS3に保存 | ビルド時間短縮 |
+| **並列実行** | 独立したテストを並列化 | パイプライン高速化 |
+| **最適なインスタンス** | ビルド内容に応じたサイズ選択 | コストとスピードのバランス |
+| **差分デプロイ** | `--no-fail-on-empty-changeset` | 不要な更新をスキップ |
+
+**buildspec.yml でのキャッシュ設定**:
+
+```yaml
+version: 0.2
+
+cache:
+  paths:
+    - '/root/.npm/**/*'           # npm キャッシュ
+    - 'node_modules/**/*'         # 依存関係
+    - '/root/.cache/pip/**/*'     # pip キャッシュ
+
+phases:
+  install:
+    commands:
+      # キャッシュがあればスキップ
+      - '[ -d node_modules ] && echo "Using cached dependencies" || npm ci'
+```
+
+### 信頼性（可用性とリカバリ）
+
+| 項目 | 推奨 | なぜ重要？ |
+|------|------|-----------|
+| **自動ロールバック** | ヘルスチェック失敗で自動復旧 | MTTR（平均復旧時間）短縮 |
+| **変更セット** | 本番はchange-set経由でデプロイ | 予期しない変更を防ぐ |
+| **テスト自動化** | ユニット/統合/E2Eテスト | 品質担保 |
+| **通知設定** | 失敗時のSlack/PagerDuty通知 | 迅速な対応 |
+| **バックアップ** | アーティファクトのバージョニング | 過去バージョンへの復旧 |
+
+### 運用効率（DevOps文化）
+
+| 項目 | 推奨 | 効果 |
+|------|------|------|
+| **IaC化** | すべてのインフラをコード化 | 再現性・監査可能性 |
+| **環境の一貫性** | dev/stg/prodで同じテンプレート | 環境差異によるバグ防止 |
+| **ドキュメント** | READMEにデプロイ手順を記載 | 属人化防止 |
+| **メトリクス収集** | DORAメトリクスの自動計測 | 継続的改善の基盤 |
 
 ### バージョン管理
 
 ```
 my-infra-repo/
-├── .gitignore
-├── README.md
-├── buildspec.yml
-├── environments/
+├── .gitignore              # 必須: 機密情報を除外
+├── README.md               # デプロイ手順を記載
+├── buildspec.yml           # ビルド定義
+├── environments/           # 環境別設定（機密情報は含めない）
 │   ├── dev.json
 │   ├── stg.json
 │   └── prod.json
-├── stacks/           # CloudFormation
-└── lib/              # CDK
+├── stacks/                 # CloudFormationテンプレート
+│   ├── 01-network.yaml
+│   ├── 02-security.yaml
+│   └── ...
+├── tests/                  # テストコード
+│   ├── unit/
+│   └── integration/
+└── scripts/                # ユーティリティスクリプト
+    ├── create-pipeline.sh
+    └── cleanup.sh
 ```
 
-**絶対にコミットしないもの**:
-- `.env`, `*.pem`, `credentials.json`
-- `cdk.out/`, `node_modules/`, `.terraform/`
+**絶対にコミットしないもの（.gitignore必須）**:
 
-### 比較まとめ
+```gitignore
+# 機密情報
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+secrets.json
 
-| 観点 | GUI | CLI | CDK |
-|------|-----|-----|-----|
-| 学習コスト | 低 | 中 | 高 |
-| 再現性 | × | △ | ◎ |
-| バージョン管理 | × | △ | ◎ |
-| 本番利用 | × | ○ | ◎ |
+# ビルド成果物
+cdk.out/
+node_modules/
+.terraform/
+__pycache__/
+*.pyc
 
----
+# IDEローカル設定
+.idea/
+.vscode/
+*.swp
+```
+
+### 作成方法の比較
+
+| 観点 | GUI | CLI | CDK | Terraform |
+|------|-----|-----|-----|-----------|
+| 学習コスト | 低 | 中 | 高 | 高 |
+| 再現性 | × | △ | ◎ | ◎ |
+| バージョン管理 | × | △ | ◎ | ◎ |
+| 本番利用 | × | ○ | ◎ | ◎ |
+| マルチクラウド | - | - | × | ◎ |
+| AWSネイティブ統合 | ○ | ○ | ◎ | △ |
+
+> **初学者向け**: 最初はGUIで仕組みを理解し、本番環境ではCDKまたはTerraformを使用しましょう。
+
+### DOP試験対策チェックリスト
+
+以下の質問に答えられるようにしておきましょう：
+
+- [ ] **Blue/Green vs Canary**: どちらをいつ使うか説明できる
+- [ ] **変更セット**: なぜ本番で使うべきか説明できる
+- [ ] **クロスアカウントデプロイ**: IAMロールの設定方法を理解している
+- [ ] **自動ロールバック**: CloudWatchアラームとの連携方法を知っている
+- [ ] **最小権限の原則**: なぜ`*`を使うべきでないか説明できる
+- [ ] **シークレット管理**: Parameter StoreとSecrets Managerの違いを説明できる
+- [ ] **DORA メトリクス**: 4つのメトリクスを説明できる
 
 ---
 
