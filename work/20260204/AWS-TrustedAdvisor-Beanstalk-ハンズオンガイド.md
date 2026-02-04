@@ -1,0 +1,2003 @@
+# AWS Trusted Advisor & Elastic Beanstalk ハンズオンガイド
+
+> **対象**: AWS DevOps Professional (DOP-C02) 試験対策
+> **前提知識**: AWS基礎、IAM、VPC、EC2、S3
+> **所要時間**: 約3.5時間
+
+---
+
+## 目次
+
+### Part 1 - Trusted Advisor
+1. [Trusted Advisor概要](#1-trusted-advisor概要)
+2. [サポートプラン別の利用可能チェック](#2-サポートプラン別の利用可能チェック)
+3. [Trusted Advisor + EventBridge連携](#3-trusted-advisor--eventbridge連携)
+4. [Organization単位のTrusted Advisor](#4-organization単位のtrusted-advisor)
+
+### Part 2 - Elastic Beanstalk
+5. [Beanstalk概要](#5-beanstalk概要)
+6. [デプロイポリシー](#6-デプロイポリシー)
+7. [.ebextensions と Platform Hooks](#7-ebextensions-と-platform-hooks)
+8. [Beanstalk + Docker](#8-beanstalk--docker)
+9. [Worker環境 (SQS連携)](#9-worker環境-sqs連携)
+10. [ハンズオン演習](#10-ハンズオン演習)
+11. [DOP試験対策チェックリスト](#11-dop試験対策チェックリスト)
+
+---
+
+# Part 1 - AWS Trusted Advisor
+
+---
+
+## 1. Trusted Advisor概要
+
+### 1.1 Trusted Advisorとは
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      AWS Trusted Advisor                               │
+│             AWSベストプラクティスの自動チェックサービス                 │
+│                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │                      5つのカテゴリ                                │ │
+│  │                                                                  │ │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐                  │ │
+│  │  │  コスト    │ │パフォーマン│ │ セキュリティ│                  │ │
+│  │  │  最適化    │ │   ス      │ │            │                  │ │
+│  │  │            │ │            │ │            │                  │ │
+│  │  │ 未使用     │ │ 過剰/不足 │ │ 設定不備   │                  │ │
+│  │  │ リソース   │ │ リソース   │ │ 脆弱性     │                  │ │
+│  │  │ 節約提案   │ │ 最適化    │ │ アクセス   │                  │ │
+│  │  └────────────┘ └────────────┘ └────────────┘                  │ │
+│  │                                                                  │ │
+│  │  ┌────────────┐ ┌────────────┐                                  │ │
+│  │  │  耐障害性  │ │ サービス  │                                  │ │
+│  │  │            │ │  制限     │                                  │ │
+│  │  │            │ │            │                                  │ │
+│  │  │ 冗長性     │ │ クォータ  │                                  │ │
+│  │  │ バックアップ│ │ 使用率    │                                  │ │
+│  │  │ 可用性     │ │ 上限到達  │                                  │ │
+│  │  └────────────┘ └────────────┘                                  │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                                                                        │
+│  チェック結果: 🔴 アクション推奨  🟡 調査推奨  🟢 問題なし           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 5カテゴリの詳細
+
+| カテゴリ | 説明 | 代表的なチェック項目 |
+|---------|------|-------------------|
+| **コスト最適化** | 無駄なコストの削減 | 未使用EIP、低使用率EC2、アイドルRDS、アイドルLB |
+| **パフォーマンス** | リソースの最適化 | EC2過剰利用、CloudFront設定、EBS IOPS最適化 |
+| **セキュリティ** | セキュリティ設定の改善 | SGの無制限アクセス、IAMアクセスキー、MFA無効、S3パブリック |
+| **耐障害性** | 冗長性・回復力の改善 | EBSスナップショット、RDSマルチAZ、ASGのAZ分散 |
+| **サービス制限** | クォータ到達の警告 | VPC数、EIP数、EC2インスタンス数（80%超で警告） |
+
+### 1.3 DOP試験での重要ポイント
+
+| トピック | 重要度 | 出題パターン |
+|---------|--------|-------------|
+| **サポートプラン別のチェック** | ★★★★★ | どのプランで何が使えるか |
+| **EventBridge連携** | ★★★★★ | 自動応答の設計 |
+| **Organizations統合** | ★★★★☆ | 組織全体のベストプラクティス |
+| **Trusted Advisor API** | ★★★★☆ | プログラマティックなアクセス |
+| **リフレッシュ間隔** | ★★★☆☆ | データの鮮度とリフレッシュ |
+| **セキュリティチェック** | ★★★★★ | 頻出: SGの0.0.0.0/0 |
+
+### 1.4 チェック結果のステータス
+
+```
+【Trusted Advisor チェック結果の読み方】
+
+┌──────────────────────────────────────────────────────────┐
+│  ステータス         │  意味                 │ アクション │
+├─────────────────────┼───────────────────────┼────────────┤
+│  🔴 Red (Error)     │ アクション推奨        │ 即時対応   │
+│  🟡 Yellow (Warning)│ 調査推奨              │ 計画的対応 │
+│  🟢 Green (OK)      │ 問題なし              │ 不要       │
+│  🔵 Blue (Excluded) │ チェックから除外済み  │ 不要       │
+│  ⬜ Gray (Refresh)  │ データ更新中          │ 待機       │
+└──────────────────────────────────────────────────────────┘
+
+リフレッシュ:
+├─ 自動: 毎週（Business/Enterprise サポート）
+├─ 手動: コンソール or API（最短5分間隔）
+└─ API: aws support refresh-trusted-advisor-check
+```
+
+---
+
+## 2. サポートプラン別の利用可能チェック
+
+### 2.1 プラン別比較
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  サポートプラン別 Trusted Advisor                       │
+│                                                                        │
+│  ┌──────────────────────┐     ┌──────────────────────┐              │
+│  │  Basic / Developer   │     │ Business / Enterprise │              │
+│  │                      │     │                      │              │
+│  │  ■ コア・セキュリティ │     │ ■ 全チェック項目     │              │
+│  │    チェックのみ       │     │  (100+ チェック)     │              │
+│  │                      │     │                      │              │
+│  │  ・S3パブリック       │     │ ■ API アクセス       │              │
+│  │  ・SG 無制限ポート   │     │                      │              │
+│  │  ・IAM 使用状況      │     │ ■ CloudWatch連携     │              │
+│  │  ・MFA (ルート)      │     │                      │              │
+│  │  ・EBS パブリック    │     │ ■ EventBridge連携    │              │
+│  │  ・RDS パブリック    │     │                      │              │
+│  │  ・サービス制限      │     │ ■ プログラマティック │              │
+│  │                      │     │   リフレッシュ       │              │
+│  └──────────────────────┘     └──────────────────────┘              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 プラン別チェック一覧
+
+| チェック項目 | Basic/Developer | Business/Enterprise |
+|-------------|:---------------:|:-------------------:|
+| **セキュリティ: SGの無制限アクセス** | ○ | ○ |
+| **セキュリティ: S3バケットパブリック** | ○ | ○ |
+| **セキュリティ: ルートMFA** | ○ | ○ |
+| **セキュリティ: IAM使用状況** | ○ | ○ |
+| **セキュリティ: EBSパブリックスナップショット** | ○ | ○ |
+| **セキュリティ: RDSパブリックスナップショット** | ○ | ○ |
+| **サービス制限** | ○ | ○ |
+| コスト: 低使用率EC2 | × | ○ |
+| コスト: アイドルRDS | × | ○ |
+| コスト: 未関連付けEIP | × | ○ |
+| コスト: アイドルLB | × | ○ |
+| パフォーマンス: EC2高使用率 | × | ○ |
+| パフォーマンス: CloudFront最適化 | × | ○ |
+| 耐障害性: RDSマルチAZ | × | ○ |
+| 耐障害性: EBSスナップショット | × | ○ |
+| 耐障害性: ASGマルチAZ | × | ○ |
+| **API/プログラマティックアクセス** | × | ○ |
+| **EventBridge連携** | × | ○ |
+
+### 2.3 CLIでのチェック確認
+
+```bash
+# ※ Business/Enterpriseサポートプラン必須
+
+# Trusted Advisorのチェック一覧取得
+aws support describe-trusted-advisor-checks \
+  --language ja \
+  --query "checks[].{id:id,name:name,category:category}" \
+  --output table
+
+# 特定カテゴリのチェック一覧
+aws support describe-trusted-advisor-checks \
+  --language ja \
+  --query "checks[?category=='security'].{id:id,name:name}" \
+  --output table
+
+# チェック結果のサマリー取得
+aws support describe-trusted-advisor-check-summaries \
+  --check-ids "Pfx0RwqBli" \
+  --query "summaries[].{status:status,flagged:resourcesSummary.resourcesFlagged}"
+
+# チェック結果の詳細取得
+aws support describe-trusted-advisor-check-result \
+  --check-id "Pfx0RwqBli" \
+  --query "result.{status:status,resources:flaggedResources[].metadata}"
+
+# チェックのリフレッシュ（最短5分間隔）
+aws support refresh-trusted-advisor-check \
+  --check-id "Pfx0RwqBli"
+```
+
+### 2.4 重要なチェックIDの例
+
+| チェック | チェックID | カテゴリ |
+|---------|-----------|---------|
+| SGの無制限アクセス（特定ポート） | HCP4007jGY | セキュリティ |
+| S3バケットパーミッション | Pfx0RwqBli | セキュリティ |
+| IAMアクセスキーローテーション | DqdJqYeRm5 | セキュリティ |
+| 低使用率EC2インスタンス | Qch7DwouX1 | コスト最適化 |
+| RDSアイドルDB | Ti39halfu8 | コスト最適化 |
+| EBSスナップショット | H7IgTzjTYb | 耐障害性 |
+
+---
+
+## 3. Trusted Advisor + EventBridge連携
+
+### 3.1 アーキテクチャ概要
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│            Trusted Advisor + EventBridge 自動応答アーキテクチャ        │
+│                                                                       │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐       │
+│  │   Trusted    │      │  Amazon      │      │   Lambda     │       │
+│  │   Advisor    │─────▶│  EventBridge │─────▶│   Function   │       │
+│  │              │      │              │      │              │       │
+│  │  チェック実行 │      │  ルール:     │      │  自動修復:   │       │
+│  │  結果変更    │      │  ステータス  │      │  SG修正     │       │
+│  │              │      │  変更検知    │      │  通知送信    │       │
+│  └──────────────┘      └──────────────┘      └──────┬───────┘       │
+│                                                       │               │
+│                         ┌────────────────────────────┼──────┐       │
+│                         │                            ▼      │       │
+│                         │  ┌──────────────┐  ┌────────────┐│       │
+│                         │  │     SNS      │  │    EC2     ││       │
+│                         │  │  通知送信    │  │  SG修正    ││       │
+│                         │  └──────────────┘  └────────────┘│       │
+│                         │  ┌──────────────┐  ┌────────────┐│       │
+│                         │  │   Systems    │  │  AWS Config ││       │
+│                         │  │   Manager    │  │  修復ルール ││       │
+│                         │  └──────────────┘  └────────────┘│       │
+│                         └───────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────┘
+
+重要: Trusted AdvisorのイベントはUS East (N. Virginia)リージョンのみ
+```
+
+### 3.2 EventBridgeルールの設定
+
+```bash
+# ※ us-east-1 リージョンで設定する必要がある（重要！）
+
+# EventBridgeルール: Trusted Advisorステータス変更
+aws events put-rule \
+  --region us-east-1 \
+  --name "trusted-advisor-security-alert" \
+  --event-pattern '{
+    "source": ["aws.trustedadvisor"],
+    "detail-type": ["Trusted Advisor Check Item Refresh Notification"],
+    "detail": {
+      "check-name": ["Security Groups - Unrestricted Access"],
+      "status": ["WARN", "ERROR"]
+    }
+  }' \
+  --state ENABLED \
+  --description "Trusted Advisor セキュリティグループ警告"
+
+# SNSトピックをターゲットに設定
+aws events put-targets \
+  --region us-east-1 \
+  --rule "trusted-advisor-security-alert" \
+  --targets '[{
+    "Id": "sns-notification",
+    "Arn": "arn:aws:sns:us-east-1:123456789012:security-alerts"
+  }]'
+```
+
+### 3.3 EventBridgeイベントの構造
+
+```json
+{
+  "version": "0",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "detail-type": "Trusted Advisor Check Item Refresh Notification",
+  "source": "aws.trustedadvisor",
+  "account": "123456789012",
+  "time": "2026-02-04T10:00:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "check-name": "Security Groups - Unrestricted Access",
+    "check-item-detail": {
+      "Status": "Red",
+      "Region": "ap-northeast-1",
+      "Security Group ID": "sg-12345678",
+      "Security Group Name": "web-server-sg",
+      "Port": "22",
+      "Protocol": "tcp",
+      "IP Range": "0.0.0.0/0"
+    },
+    "status": "ERROR",
+    "resource_id": "sg-12345678"
+  }
+}
+```
+
+### 3.4 自動修復Lambda関数の例
+
+```python
+# trusted_advisor_remediation.py
+import boto3
+import json
+
+def lambda_handler(event, context):
+    """
+    Trusted Advisor + EventBridge からの
+    セキュリティグループ違反を自動修復
+    """
+    detail = event['detail']
+    check_detail = detail['check-item-detail']
+
+    sg_id = check_detail['Security Group ID']
+    port = int(check_detail['Port'])
+    protocol = check_detail['Protocol']
+    region = check_detail['Region']
+
+    ec2 = boto3.client('ec2', region_name=region)
+    sns = boto3.client('sns', region_name='us-east-1')
+
+    # 0.0.0.0/0 のインバウンドルールを削除
+    try:
+        ec2.revoke_security_group_ingress(
+            GroupId=sg_id,
+            IpPermissions=[{
+                'IpProtocol': protocol,
+                'FromPort': port,
+                'ToPort': port,
+                'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+            }]
+        )
+        message = f"自動修復完了: {sg_id} のポート {port} から 0.0.0.0/0 を削除"
+    except Exception as e:
+        message = f"自動修復失敗: {sg_id} - {str(e)}"
+
+    # SNS通知
+    sns.publish(
+        TopicArn='arn:aws:sns:us-east-1:123456789012:security-alerts',
+        Subject='Trusted Advisor 自動修復通知',
+        Message=message
+    )
+
+    return {'statusCode': 200, 'body': message}
+```
+
+### 3.5 サービス制限のEventBridge連携
+
+```bash
+# サービス制限チェックのEventBridgeルール
+aws events put-rule \
+  --region us-east-1 \
+  --name "trusted-advisor-service-limit" \
+  --event-pattern '{
+    "source": ["aws.trustedadvisor"],
+    "detail-type": ["Trusted Advisor Check Item Refresh Notification"],
+    "detail": {
+      "status": ["WARN", "ERROR"],
+      "check-name": [
+        {"prefix": "Service Limits"}
+      ]
+    }
+  }' \
+  --state ENABLED
+
+# Lambda でクォータ増加リクエストを自動化
+# → Service Quotas API と連携
+```
+
+---
+
+## 4. Organization単位のTrusted Advisor
+
+### 4.1 組織ビューの概要
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│         AWS Organizations + Trusted Advisor 組織ビュー               │
+│                                                                      │
+│  ┌──────────────────────────┐                                      │
+│  │   Management Account     │                                      │
+│  │                          │                                      │
+│  │  Trusted Advisor         │                                      │
+│  │  Organizational View     │◀──── 組織全体のチェック結果を集約    │
+│  │                          │                                      │
+│  └──────────┬───────────────┘                                      │
+│             │                                                        │
+│      ┌──────┴──────────────────────────────┐                        │
+│      │              │                       │                        │
+│      ▼              ▼                       ▼                        │
+│  ┌─────────┐  ┌─────────────┐  ┌──────────────┐                   │
+│  │OU: Prod │  │OU: Dev      │  │OU: Security  │                   │
+│  │         │  │             │  │              │                   │
+│  │ Acct-A  │  │ Acct-C      │  │ Acct-E       │                   │
+│  │ Acct-B  │  │ Acct-D      │  │              │                   │
+│  └─────────┘  └─────────────┘  └──────────────┘                   │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                     レポート出力                               │  │
+│  │                                                                │  │
+│  │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐  │  │
+│  │  │     S3       │     │  QuickSight  │     │    Athena    │  │  │
+│  │  │  JSON/CSV    │────▶│  ダッシュ    │     │  クエリ分析  │  │  │
+│  │  │  レポート    │     │  ボード      │     │              │  │  │
+│  │  └──────────────┘     └──────────────┘     └──────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 組織ビューの有効化と管理
+
+```bash
+# 組織ビューの有効化（Management Accountで実行）
+aws trustedadvisor set-organization-access \
+  --region us-east-1 \
+  --status ENABLED
+
+# 組織レポートの作成
+aws trustedadvisor create-organization-report \
+  --region us-east-1 \
+  --format JSON
+
+# レポートの確認
+aws trustedadvisor describe-organization-reports \
+  --region us-east-1
+
+# レポートのダウンロード（S3から取得）
+aws s3 cp s3://trusted-advisor-org-report-ACCOUNT_ID/report.json ./
+```
+
+### 4.3 組織全体のチェック結果をAthenaで分析
+
+```sql
+-- Athena テーブル作成（S3のレポートに対して）
+CREATE EXTERNAL TABLE trusted_advisor_org_report (
+  account_id STRING,
+  check_name STRING,
+  category STRING,
+  status STRING,
+  region STRING,
+  resource_id STRING,
+  timestamp STRING
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 's3://trusted-advisor-org-reports/';
+
+-- カテゴリ別の問題数集計
+SELECT
+  category,
+  status,
+  COUNT(*) as count
+FROM trusted_advisor_org_report
+WHERE status IN ('WARN', 'ERROR')
+GROUP BY category, status
+ORDER BY count DESC;
+
+-- アカウント別のセキュリティ問題
+SELECT
+  account_id,
+  check_name,
+  COUNT(*) as flagged_count
+FROM trusted_advisor_org_report
+WHERE category = 'security' AND status = 'ERROR'
+GROUP BY account_id, check_name
+ORDER BY flagged_count DESC;
+```
+
+### 4.4 AWS Trusted Advisor Priority (Enterprise サポート)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│              Trusted Advisor Priority                               │
+│              (Enterprise サポート限定)                              │
+│                                                                    │
+│  特徴:                                                             │
+│  ├─ AWSテクニカルアカウントマネージャ(TAM)が優先順位付け          │
+│  ├─ 組織全体のリスクを優先度順に表示                              │
+│  ├─ AWS Health と統合                                             │
+│  └─ APIでのプログラマティックアクセス対応                         │
+│                                                                    │
+│  優先度レベル:                                                     │
+│  ├─ Critical: 即時対応が必要                                      │
+│  ├─ Warning: 計画的対応が必要                                     │
+│  └─ Informational: 参考情報                                       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Part 2 - AWS Elastic Beanstalk
+
+---
+
+## 5. Beanstalk概要
+
+### 5.1 Elastic Beanstalkとは
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     AWS Elastic Beanstalk                              │
+│           アプリケーションの簡易デプロイ・管理サービス                 │
+│                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │                   開発者が用意するもの                            │ │
+│  │                                                                  │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │ │
+│  │  │ アプリケーション│  │   設定       │  │   拡張設定   │          │ │
+│  │  │  コード       │  │ (環境変数)   │  │(.ebextensions)│         │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘          │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                              │                                        │
+│                              ▼                                        │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │               Beanstalkが自動作成・管理するもの                  │ │
+│  │                                                                  │ │
+│  │  ┌─────┐  ┌─────┐  ┌─────┐  ┌─────┐  ┌─────┐  ┌──────┐     │ │
+│  │  │ EC2 │  │ ASG │  │ ELB │  │ SG  │  │ CW  │  │ S3   │     │ │
+│  │  │     │  │     │  │     │  │     │  │Logs │  │Bucket│     │ │
+│  │  └─────┘  └─────┘  └─────┘  └─────┘  └─────┘  └──────┘     │ │
+│  │                                                                  │ │
+│  │  ※ インフラの完全な制御権は開発者に残る                         │ │
+│  │  ※ CloudFormationスタックとして管理される                       │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 主要コンポーネント
+
+```
+【Beanstalk の3大コンポーネント】
+
+1. アプリケーション (Application)
+   └─ プロジェクト全体のコンテナ
+      │
+      ├── 2. アプリケーションバージョン (Application Version)
+      │   ├── v1.0.0 → S3に保存されたソースバンドル
+      │   ├── v1.1.0 → S3に保存されたソースバンドル
+      │   └── v2.0.0 → S3に保存されたソースバンドル
+      │
+      └── 3. 環境 (Environment)
+          ├── Production環境 (Web Server型)
+          │   ├─ ELB + ASG + EC2
+          │   └─ 現在: v1.1.0
+          │
+          ├── Staging環境 (Web Server型)
+          │   ├─ ELB + ASG + EC2
+          │   └─ 現在: v2.0.0
+          │
+          └── Worker環境 (Worker型)
+              ├─ SQS + ASG + EC2
+              └─ 現在: v1.1.0
+
+バージョンライフサイクル:
+├─ デフォルト: 最大1000バージョン保持
+├─ ライフサイクルポリシー: 古いバージョンの自動削除
+│   ├─ 総数ベース: N個を超えたら削除
+│   └─ 期間ベース: N日経過で削除
+└─ S3ソースバンドルの削除も選択可能
+```
+
+### 5.3 環境タイプ
+
+| 項目 | Web Server環境 | Worker環境 |
+|------|--------------|-----------|
+| **用途** | HTTPリクエスト処理 | バックグラウンド処理 |
+| **フロントエンド** | ELB (ALB/NLB/CLB) | なし |
+| **バックエンド** | EC2 (ASG) | EC2 (ASG) |
+| **入力** | HTTP/HTTPS | SQS メッセージ |
+| **デーモン** | なし | SQSデーモン (sqsd) |
+| **スケーリング** | リクエスト数ベース | キュー深度ベース |
+
+### 5.4 対応プラットフォーム
+
+| プラットフォーム | バージョン例 | 備考 |
+|----------------|-------------|------|
+| **Node.js** | Node.js 20 on AL2023 | npm/yarn対応 |
+| **Python** | Python 3.12 on AL2023 | pip/pipenv対応 |
+| **Java SE** | Corretto 21 on AL2023 | JAR実行 |
+| **Tomcat** | Tomcat 10 on AL2023 | WAR デプロイ |
+| **.NET on Linux** | .NET 8 on AL2023 | クロスプラットフォーム |
+| **Go** | Go 1.21 on AL2023 | バイナリ実行 |
+| **Ruby** | Ruby 3.2 on AL2023 | Puma/Passenger |
+| **PHP** | PHP 8.3 on AL2023 | Composer対応 |
+| **Docker** | Docker on AL2023 | 単一/マルチコンテナ |
+| **Custom Platform** | Packer で作成 | 独自プラットフォーム |
+
+---
+
+## 6. デプロイポリシー
+
+### 6.1 デプロイポリシー比較
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                   Beanstalk デプロイポリシー比較                      │
+│                                                                      │
+│  ■ = 旧バージョン    □ = 新バージョン    × = 停止中                │
+│                                                                      │
+│  1. All at once (全て一括)                                          │
+│     ┌─────────────────┐     ┌─────────────────┐                    │
+│     │ ■ ■ ■ ■         │────▶│ □ □ □ □         │                    │
+│     └─────────────────┘     └─────────────────┘                    │
+│     ※ ダウンタイムあり、最速                                       │
+│                                                                      │
+│  2. Rolling (ローリング)                                            │
+│     ┌─────────────────┐     ┌─────────────────┐     ┌───────────┐│
+│     │ ■ ■ ■ ■         │────▶│ □ □ ■ ■         │────▶│ □ □ □ □   ││
+│     └─────────────────┘     └─────────────────┘     └───────────┘│
+│     ※ バッチサイズ分ずつ更新、キャパシティ減少あり                 │
+│                                                                      │
+│  3. Rolling with additional batch (追加バッチ付き)                  │
+│     ┌─────────────────┐     ┌───────────────────┐   ┌───────────┐│
+│     │ ■ ■ ■ ■         │────▶│ □ □ ■ ■ + □ □    │──▶│ □ □ □ □   ││
+│     └─────────────────┘     └───────────────────┘   └───────────┘│
+│     ※ 新バッチ追加後に旧バッチ更新、キャパシティ維持              │
+│                                                                      │
+│  4. Immutable (イミュータブル)                                      │
+│     ┌─────────────────┐     ┌───────────────────┐   ┌───────────┐│
+│     │ ■ ■ ■ ■         │────▶│ ■ ■ ■ ■ │ □ □ □ □│──▶│ □ □ □ □   ││
+│     │    ASG-1         │     │  ASG-1   │ ASG-2  │   │  ASG-1    ││
+│     └─────────────────┘     └───────────────────┘   └───────────┘│
+│     ※ 新ASGで完全に新環境を立ち上げ、成功後に旧を削除              │
+│                                                                      │
+│  5. Traffic splitting (トラフィック分割)                            │
+│     ┌─────────────────┐     ┌───────────────────┐   ┌───────────┐│
+│     │ ■ ■ ■ ■         │────▶│ ■ ■ ■ ■ │ □ □ □ □│──▶│ □ □ □ □   ││
+│     │  100% traffic    │     │ 90%      │ 10%    │   │  100%     ││
+│     └─────────────────┘     └───────────────────┘   └───────────┘│
+│     ※ ALBで段階的にトラフィックを移行（カナリアデプロイ）          │
+│                                                                      │
+│  6. Blue/Green (CNAME swap)                                         │
+│     ┌──────────┐  ┌──────────┐     ┌──────────┐  ┌──────────┐  │
+│     │ Env-Blue │  │Env-Green │────▶│ Env-Blue │  │Env-Green │  │
+│     │ ■ ■ ■ ■ │  │ □ □ □ □ │     │ ■ ■ ■ ■ │  │ □ □ □ □ │  │
+│     │prod.app  │  │stg.app   │     │stg.app   │  │prod.app  │  │
+│     └──────────┘  └──────────┘     └──────────┘  └──────────┘  │
+│     ※ CNAME交換、完全に独立した環境、ロールバック容易              │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 デプロイポリシー詳細比較表
+
+| ポリシー | ダウンタイム | デプロイ速度 | ロールバック | キャパシティ | コスト | DNS変更 |
+|---------|:----------:|:----------:|:----------:|:----------:|:-----:|:-------:|
+| **All at once** | あり | 最速 | 再デプロイ | 減少 | 最低 | なし |
+| **Rolling** | なし | 中 | 再デプロイ | 一時減少 | 低 | なし |
+| **Rolling w/ batch** | なし | 中〜低 | 再デプロイ | 維持 | 中 | なし |
+| **Immutable** | なし | 低 | 新ASG削除 | 倍増 | 高 | なし |
+| **Traffic splitting** | なし | 低 | 新ASG削除 | 倍増 | 高 | なし |
+| **Blue/Green** | 最小 | 低 | CNAME swap | 倍増 | 最高 | あり |
+
+### 6.3 デプロイ設定のCLI操作
+
+```bash
+# 現在のデプロイ設定確認
+aws elasticbeanstalk describe-configuration-settings \
+  --application-name my-app \
+  --environment-name my-env \
+  --query "ConfigurationSettings[0].OptionSettings[?Namespace=='aws:elasticbeanstalk:command']"
+
+# All at once
+aws elasticbeanstalk update-environment \
+  --environment-name my-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=AllAtOnce
+
+# Rolling（バッチサイズ: 25%）
+aws elasticbeanstalk update-environment \
+  --environment-name my-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=Rolling \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSizeType,Value=Percentage \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSize,Value=25
+
+# Rolling with additional batch
+aws elasticbeanstalk update-environment \
+  --environment-name my-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=RollingWithAdditionalBatch \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSizeType,Value=Fixed \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSize,Value=2
+
+# Immutable
+aws elasticbeanstalk update-environment \
+  --environment-name my-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=Immutable
+
+# Traffic splitting（10%のトラフィックで10分間評価）
+aws elasticbeanstalk update-environment \
+  --environment-name my-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=TrafficSplitting \
+    Namespace=aws:elasticbeanstalk:trafficsplitting,OptionName=NewVersionPercent,Value=10 \
+    Namespace=aws:elasticbeanstalk:trafficsplitting,OptionName=EvaluationTime,Value=10
+```
+
+### 6.4 Blue/Greenデプロイの実行
+
+```bash
+# Blue/Green は Beanstalk の組み込み機能ではなく、
+# 環境の CNAME swap で実現する
+
+# 1. 現在の本番環境を確認
+aws elasticbeanstalk describe-environments \
+  --environment-names prod-env \
+  --query "Environments[0].{CNAME:CNAME,Status:Status,Version:VersionLabel}"
+
+# 2. Green環境を新バージョンで作成
+aws elasticbeanstalk create-environment \
+  --application-name my-app \
+  --environment-name green-env \
+  --solution-stack-name "64bit Amazon Linux 2023 v6.1.0 running Node.js 20" \
+  --version-label v2.0.0 \
+  --option-settings file://env-options.json
+
+# 3. Green環境の正常性確認
+aws elasticbeanstalk describe-environments \
+  --environment-names green-env \
+  --query "Environments[0].{Health:Health,Status:Status}"
+
+# 4. CNAME swap 実行
+aws elasticbeanstalk swap-environment-cnames \
+  --source-environment-name prod-env \
+  --destination-environment-name green-env
+
+# 5. swap後の確認
+aws elasticbeanstalk describe-environments \
+  --environment-names prod-env green-env \
+  --query "Environments[].{Name:EnvironmentName,CNAME:CNAME}"
+
+# 6. 問題がなければ旧環境を削除
+aws elasticbeanstalk terminate-environment \
+  --environment-name prod-env
+
+# ロールバック: もう一度 swap-environment-cnames を実行するだけ
+```
+
+### 6.5 Blue/Green時のDNS注意点
+
+```
+【Blue/Green デプロイの DNS 注意事項】
+
+CNAME swap の場合:
+├─ Beanstalk URL (xxx.elasticbeanstalk.com) が入れ替わる
+├─ 独自ドメインで CNAME を使用している場合は透過的
+├─ Route 53 Alias レコードの場合は手動更新が必要
+└─ DNS TTL に注意（伝播時間あり）
+
+┌──────────────────────────────────────────────────┐
+│  swap前:                                          │
+│  prod-env.elasticbeanstalk.com → Blue (v1)       │
+│  green-env.elasticbeanstalk.com → Green (v2)     │
+│                                                   │
+│  swap後:                                          │
+│  prod-env.elasticbeanstalk.com → Green (v2) ★   │
+│  green-env.elasticbeanstalk.com → Blue (v1)      │
+│                                                   │
+│  ※ CNAMEレベルの交換であり、ELB自体は変わらない │
+│  ※ RDS等の外部リソースは共有される設計が必要     │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. .ebextensions と Platform Hooks
+
+### 7.1 .ebextensionsの概要
+
+```
+【.ebextensions ディレクトリ構造】
+
+my-app/
+├── app.js                      ← アプリケーションコード
+├── package.json
+├── .ebextensions/              ← カスタマイズ設定
+│   ├── 01-packages.config      ← パッケージインストール
+│   ├── 02-files.config         ← ファイル作成
+│   ├── 03-commands.config      ← コマンド実行
+│   ├── 04-services.config      ← サービス管理
+│   ├── 05-options.config       ← 環境設定
+│   └── 99-cleanup.config       ← クリーンアップ
+└── .platform/                  ← Platform Hooks (AL2以降)
+    ├── hooks/
+    │   ├── prebuild/
+    │   ├── predeploy/
+    │   └── postdeploy/
+    └── confighooks/
+        ├── prebuild/
+        ├── predeploy/
+        └── postdeploy/
+
+※ .config ファイルは YAML or JSON形式
+※ ファイル名のアルファベット順に実行される
+※ 番号プレフィックスで実行順序を制御
+```
+
+### 7.2 .ebextensionsの主要セクション
+
+```yaml
+# 01-packages.config
+# パッケージのインストール
+packages:
+  yum:
+    gcc: []
+    make: []
+    openssl-devel: []
+
+# 02-files.config
+# ファイルの作成
+files:
+  "/etc/nginx/conf.d/proxy.conf":
+    mode: "000644"
+    owner: root
+    group: root
+    content: |
+      client_max_body_size 50M;
+      proxy_read_timeout 300;
+
+  "/opt/elasticbeanstalk/hooks/appdeploy/post/99_restart_delayed_job.sh":
+    mode: "000755"
+    owner: root
+    group: root
+    content: |
+      #!/bin/bash
+      echo "Post-deploy hook executed"
+
+# 03-commands.config
+# デプロイ前に実行するコマンド（アプリ展開前）
+commands:
+  01_create_directory:
+    command: "mkdir -p /var/app/shared/logs"
+  02_set_permissions:
+    command: "chmod 755 /var/app/shared/logs"
+  03_conditional_command:
+    command: "echo 'Only on leader'"
+    leader_only: true    # ← リーダーインスタンスのみで実行
+
+# 04-container-commands.config
+# アプリ展開後、起動前に実行するコマンド
+container_commands:
+  01_migrate_db:
+    command: "python manage.py migrate"
+    leader_only: true
+  02_collectstatic:
+    command: "python manage.py collectstatic --noinput"
+  03_conditional:
+    command: "echo 'Production only'"
+    test: '[ "${NODE_ENV}" = "production" ]'
+```
+
+### 7.3 commands vs container_commands
+
+| 項目 | commands | container_commands |
+|------|---------|-------------------|
+| **実行タイミング** | アプリ展開前 | アプリ展開後、起動前 |
+| **作業ディレクトリ** | / (ルート) | /var/app/staging/ |
+| **アプリコード参照** | 不可 | 可能 |
+| **leader_only** | 対応 | 対応 |
+| **用途** | OS設定、パッケージ | DBマイグレーション等 |
+
+### 7.4 環境設定の.ebextensions
+
+```yaml
+# 05-options.config
+option_settings:
+  # 環境変数
+  aws:elasticbeanstalk:application:environment:
+    NODE_ENV: production
+    DB_HOST: mydb.cluster-xxx.ap-northeast-1.rds.amazonaws.com
+    CACHE_URL: mycluster.xxx.cache.amazonaws.com
+
+  # ASG設定
+  aws:autoscaling:asg:
+    MinSize: 2
+    MaxSize: 6
+
+  # 起動設定
+  aws:autoscaling:launchconfiguration:
+    InstanceType: t3.medium
+    SecurityGroups: sg-12345678
+    IamInstanceProfile: aws-elasticbeanstalk-ec2-role
+
+  # ELBヘルスチェック
+  aws:elasticbeanstalk:environment:process:default:
+    HealthCheckPath: /health
+    MatcherHTTPCode: "200"
+
+  # デプロイポリシー
+  aws:elasticbeanstalk:command:
+    DeploymentPolicy: RollingWithAdditionalBatch
+    BatchSizeType: Percentage
+    BatchSize: 25
+    Timeout: 600
+
+  # ストリーミングログ
+  aws:elasticbeanstalk:cloudwatch:logs:
+    StreamLogs: true
+    DeleteOnTerminate: false
+    RetentionInDays: 30
+```
+
+### 7.5 リソース作成の.ebextensions
+
+```yaml
+# 06-resources.config
+# CloudFormationリソースを直接定義可能
+Resources:
+  # SQSキュー
+  MySQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: my-app-queue
+      VisibilityTimeout: 300
+
+  # DynamoDBテーブル
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: my-app-table
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # セキュリティグループルール追加
+  MySecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::GetAtt:
+          - AWSEBSecurityGroup
+          - GroupId
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: sg-redis-12345
+```
+
+### 7.6 Platform Hooks (Amazon Linux 2以降)
+
+```
+【Platform Hooks の実行順序】
+
+デプロイ時:
+  1. .platform/hooks/prebuild/    ← ビルド前
+  2. .platform/hooks/predeploy/   ← デプロイ前
+  3. .platform/hooks/postdeploy/  ← デプロイ後
+
+設定変更時:
+  1. .platform/confighooks/prebuild/
+  2. .platform/confighooks/predeploy/
+  3. .platform/confighooks/postdeploy/
+
+ファイル形式:
+├─ シェルスクリプト (.sh)
+├─ 実行権限が必要 (chmod +x)
+└─ 名前のアルファベット順に実行
+```
+
+```bash
+# Platform Hooks の例
+
+# .platform/hooks/predeploy/01_install_deps.sh
+#!/bin/bash
+set -e
+echo "Installing additional dependencies..."
+yum install -y ImageMagick
+
+# .platform/hooks/postdeploy/01_run_migrations.sh
+#!/bin/bash
+set -e
+cd /var/app/current
+source /var/app/venv/*/bin/activate
+python manage.py migrate --noinput
+echo "Database migration completed"
+
+# .platform/hooks/postdeploy/02_warm_cache.sh
+#!/bin/bash
+set -e
+curl -s http://localhost:5000/api/warm-cache > /dev/null
+echo "Cache warmed up"
+```
+
+### 7.7 .ebextensions vs Platform Hooks
+
+| 項目 | .ebextensions | Platform Hooks |
+|------|-------------|---------------|
+| **対応OS** | AL1/AL2/AL2023 | AL2/AL2023のみ |
+| **形式** | YAML/JSON (.config) | シェルスクリプト |
+| **用途** | パッケージ/ファイル/設定/リソース | カスタムスクリプト |
+| **推奨** | 設定・リソース定義 | カスタムビルド/デプロイ |
+| **デバッグ** | やや困難 | ログで追跡容易 |
+
+---
+
+## 8. Beanstalk + Docker
+
+### 8.1 Docker on Beanstalk の種類
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│              Elastic Beanstalk + Docker                              │
+│                                                                      │
+│  ┌───────────────────────────┐  ┌───────────────────────────────┐  │
+│  │  Single Container Docker  │  │  Multi-container Docker       │  │
+│  │                           │  │  (ECS on Beanstalk)           │  │
+│  │  ┌─────────────────────┐ │  │  ┌──────────────────────────┐ │  │
+│  │  │      EC2             │ │  │  │         EC2              │ │  │
+│  │  │  ┌───────────────┐  │ │  │  │  ┌─────┐  ┌─────┐       │ │  │
+│  │  │  │  Container    │  │ │  │  │  │App  │  │Nginx│       │ │  │
+│  │  │  │  (単一)       │  │ │  │  │  │     │  │     │       │ │  │
+│  │  │  └───────────────┘  │ │  │  │  └─────┘  └─────┘       │ │  │
+│  │  └─────────────────────┘ │  │  │  ┌─────┐                 │ │  │
+│  │                           │  │  │  │Redis│  (ECSタスク)    │ │  │
+│  │  設定: Dockerfile        │  │  │  └─────┘                 │ │  │
+│  │        or Dockerrun.aws  │  │  └──────────────────────────┘ │  │
+│  │                           │  │                               │  │
+│  └───────────────────────────┘  │  設定: Dockerrun.aws.json    │  │
+│                                  │        v2 (ECSタスク定義)    │  │
+│                                  └───────────────────────────────┘  │
+│                                                                      │
+│  ※ マルチコンテナはECSクラスタとして管理される                      │
+│  ※ AL2023ではDocker Composeも対応                                   │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Single Container Docker
+
+```dockerfile
+# Dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --production
+COPY . .
+EXPOSE 8080
+CMD ["node", "server.js"]
+```
+
+```json
+// Dockerrun.aws.json (v1) - ECRイメージを使用する場合
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/my-app:latest",
+    "Update": "true"
+  },
+  "Ports": [
+    {
+      "ContainerPort": 8080,
+      "HostPort": 80
+    }
+  ],
+  "Logging": "/var/log/app"
+}
+```
+
+### 8.3 Multi-container Docker (Dockerrun.aws.json v2)
+
+```json
+// Dockerrun.aws.json (v2) - ECSタスク定義形式
+{
+  "AWSEBDockerrunVersion": 2,
+  "containerDefinitions": [
+    {
+      "name": "nginx-proxy",
+      "image": "nginx:latest",
+      "essential": true,
+      "memory": 128,
+      "portMappings": [
+        {
+          "hostPort": 80,
+          "containerPort": 80
+        }
+      ],
+      "links": ["app"],
+      "mountPoints": [
+        {
+          "sourceVolume": "nginx-config",
+          "containerPath": "/etc/nginx/conf.d",
+          "readOnly": true
+        }
+      ]
+    },
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/my-app:latest",
+      "essential": true,
+      "memory": 512,
+      "portMappings": [
+        {
+          "hostPort": 3000,
+          "containerPort": 3000
+        }
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        }
+      ]
+    }
+  ],
+  "volumes": [
+    {
+      "name": "nginx-config",
+      "host": {
+        "sourcePath": "/var/app/current/nginx"
+      }
+    }
+  ]
+}
+```
+
+### 8.4 Docker Compose on Beanstalk (AL2/AL2023)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "80:8080"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=${RDS_HOSTNAME}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+```
+
+```bash
+# Docker Compose でのデプロイ
+# ソースバンドルに docker-compose.yml を含めるだけ
+
+# ソースバンドル作成
+zip -r app.zip . -x ".git/*" "node_modules/*"
+
+# デプロイ
+eb deploy
+```
+
+### 8.5 ECRからのイメージ取得設定
+
+```bash
+# ECR認証情報の設定
+# EC2インスタンスプロファイルに以下のポリシーを付与
+
+# IAMポリシー例
+cat << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+```
+
+---
+
+## 9. Worker環境 (SQS連携)
+
+### 9.1 Worker環境のアーキテクチャ
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│              Beanstalk Worker環境アーキテクチャ                       │
+│                                                                      │
+│  ┌──────────────┐                                                  │
+│  │  Web環境     │─ 非同期処理要求 ─▶ ┌──────────────┐             │
+│  │  (API)       │                     │    SQS       │             │
+│  └──────────────┘                     │   キュー     │             │
+│                                        └──────┬───────┘             │
+│                                               │                      │
+│                                               ▼                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                    Worker環境                                │   │
+│  │                                                              │   │
+│  │  ┌─────────────────────────────────────────────────────┐   │   │
+│  │  │              EC2 インスタンス                         │   │   │
+│  │  │                                                      │   │   │
+│  │  │  ┌──────────────┐     ┌──────────────┐              │   │   │
+│  │  │  │  SQS Daemon  │────▶│ Application  │              │   │   │
+│  │  │  │  (sqsd)      │     │ (HTTP POST   │              │   │   │
+│  │  │  │              │     │  localhost)   │              │   │   │
+│  │  │  │ キューポーリング│   │              │              │   │   │
+│  │  │  │ メッセージ取得│     │ /worker      │              │   │   │
+│  │  │  │ 削除管理    │     │ エンドポイント│              │   │   │
+│  │  │  └──────────────┘     └──────────────┘              │   │   │
+│  │  └─────────────────────────────────────────────────────┘   │   │
+│  │                                                              │   │
+│  │  Auto Scaling: キュー深度ベース                              │   │
+│  │  スケールアウト: メッセージ数 > 閾値                         │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  Dead Letter Queue (DLQ):                                           │
+│  ├─ 処理失敗メッセージの退避先                                     │
+│  └─ maxReceiveCount 超過で DLQ に移動                              │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 SQS Daemon (sqsd) の動作
+
+```
+【sqsd の処理フロー】
+
+1. SQS キューからメッセージをポーリング
+2. メッセージを HTTP POST でアプリケーションに送信
+   POST http://localhost/worker
+   Content-Type: application/json
+   X-Aws-Sqsd-Msgid: メッセージID
+   X-Aws-Sqsd-Queue: キューURL
+   X-Aws-Sqsd-First-Received-At: 初回受信時刻
+   X-Aws-Sqsd-Receive-Count: 受信回数
+   X-Aws-Sqsd-Attr-*: メッセージ属性
+
+3. アプリケーションが 200 OK を返すと:
+   → sqsd がSQSからメッセージを削除
+
+4. アプリケーションが 200 以外を返すと:
+   → メッセージは visibility timeout 後に再処理
+   → maxReceiveCount 超過で DLQ に移動
+
+重要設定:
+├─ Worker Queue URL: 使用するSQSキュー
+├─ HTTP Path: POST先のパス (デフォルト: /)
+├─ HTTP Connections: 同時接続数
+├─ Visibility Timeout: メッセージ不可視時間
+├─ Inactivity Timeout: HTTP応答待ち時間
+└─ Error Visibility Timeout: エラー時の不可視時間
+```
+
+### 9.3 定期タスク (cron.yaml)
+
+```yaml
+# cron.yaml - Worker環境でのスケジュールタスク
+version: 1
+cron:
+  - name: "daily-cleanup"
+    url: "/scheduled/cleanup"
+    schedule: "0 2 * * *"    # 毎日AM2:00 (UTC)
+
+  - name: "hourly-sync"
+    url: "/scheduled/sync"
+    schedule: "0 * * * *"    # 毎時0分
+
+  - name: "weekly-report"
+    url: "/scheduled/report"
+    schedule: "0 9 * * MON"  # 毎週月曜 AM9:00 (UTC)
+```
+
+```
+【cron.yaml の仕組み】
+
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│   cron.yaml  │─────▶│    SQS       │─────▶│   Worker     │
+│  スケジュール │      │  メッセージ  │      │  アプリ      │
+│  定義        │      │  自動投入    │      │  HTTP POST   │
+└──────────────┘      └──────────────┘      └──────────────┘
+
+※ Beanstalk がリーダーインスタンスで cron を管理
+※ SQS 経由でメッセージを投入するため、重複実行の可能性あり
+※ アプリケーション側で冪等性を確保すること
+```
+
+### 9.4 Worker環境の設定
+
+```bash
+# Worker環境の作成
+aws elasticbeanstalk create-environment \
+  --application-name my-app \
+  --environment-name my-worker-env \
+  --tier "Name=Worker,Type=SQS/HTTP" \
+  --solution-stack-name "64bit Amazon Linux 2023 v6.1.0 running Node.js 20" \
+  --version-label v1.0.0 \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=WorkerQueueURL,Value=https://sqs.ap-northeast-1.amazonaws.com/123456789012/my-queue \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=HttpPath,Value=/worker \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=HttpConnections,Value=5 \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=InactivityTimeout,Value=299 \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=VisibilityTimeout,Value=300 \
+    Namespace=aws:elasticbeanstalk:sqsd,OptionName=ErrorVisibilityTimeout,Value=30
+
+# Dead Letter Queue設定
+# .ebextensions/worker.config で設定
+```
+
+```yaml
+# .ebextensions/worker.config
+option_settings:
+  aws:elasticbeanstalk:sqsd:
+    WorkerQueueURL: https://sqs.ap-northeast-1.amazonaws.com/123456789012/my-queue
+    HttpPath: /worker
+    MimeType: application/json
+    HttpConnections: 5
+    InactivityTimeout: 299
+    VisibilityTimeout: 300
+    RetentionPeriod: 345600
+    ErrorVisibilityTimeout: 30
+    MaxRetries: 3
+```
+
+---
+
+## 10. ハンズオン演習
+
+### 10.1 演習1: Trusted Advisorチェックの確認
+
+```bash
+# ※ Business/Enterprise サポートプラン必要
+
+# 全チェック一覧の取得
+aws support describe-trusted-advisor-checks \
+  --language ja \
+  --query "checks[].{Category:category,Name:name}" \
+  --output table
+
+# セキュリティカテゴリのみ
+aws support describe-trusted-advisor-checks \
+  --language ja \
+  --query "checks[?category=='security'].{ID:id,Name:name}" \
+  --output table
+
+# サービス制限チェックのサマリー
+aws support describe-trusted-advisor-checks \
+  --language ja \
+  --query "checks[?category=='service_limits'].id" \
+  --output text | tr '\t' '\n' | head -5 | while read CHECK_ID; do
+    echo "--- Check: $CHECK_ID ---"
+    aws support describe-trusted-advisor-check-result \
+      --check-id "$CHECK_ID" \
+      --query "result.{Status:status,Flagged:resourcesSummary.resourcesFlagged}" \
+      --output table
+done
+
+# 特定チェックのリフレッシュ
+aws support refresh-trusted-advisor-check \
+  --check-id "Pfx0RwqBli"
+
+# リフレッシュステータス確認
+aws support describe-trusted-advisor-check-refresh-statuses \
+  --check-ids "Pfx0RwqBli"
+```
+
+### 10.2 演習2: Beanstalkアプリケーションの作成とデプロイ
+
+```bash
+# EB CLIのインストール
+pip install awsebcli
+
+# 1. アプリケーションの初期化
+mkdir my-eb-app && cd my-eb-app
+
+# Node.jsアプリケーションの作成
+cat > app.js << 'EOF'
+const http = require('http');
+const port = process.env.PORT || 8080;
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200);
+    res.end('OK');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`
+    <h1>Elastic Beanstalk Demo</h1>
+    <p>Version: ${process.env.APP_VERSION || '1.0.0'}</p>
+    <p>Environment: ${process.env.NODE_ENV || 'development'}</p>
+    <p>Hostname: ${require('os').hostname()}</p>
+  `);
+});
+
+server.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
+EOF
+
+cat > package.json << 'EOF'
+{
+  "name": "my-eb-app",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node app.js"
+  }
+}
+EOF
+
+# 2. EB CLIで初期化
+eb init my-eb-app \
+  --platform "Node.js 20 running on 64bit Amazon Linux 2023" \
+  --region ap-northeast-1
+
+# 3. 環境作成
+eb create prod-env \
+  --instance_type t3.micro \
+  --elb-type application \
+  --scale 2
+
+# 4. 環境の確認
+eb status
+eb health
+eb logs
+
+# 5. 環境へのアクセス
+eb open
+```
+
+### 10.3 演習3: .ebextensions の適用
+
+```bash
+# .ebextensions ディレクトリの作成
+mkdir -p .ebextensions
+
+# 環境設定
+cat > .ebextensions/01-options.config << 'EOF'
+option_settings:
+  aws:elasticbeanstalk:application:environment:
+    NODE_ENV: production
+    APP_VERSION: "2.0.0"
+
+  aws:elasticbeanstalk:environment:process:default:
+    HealthCheckPath: /health
+    MatcherHTTPCode: "200"
+
+  aws:elasticbeanstalk:cloudwatch:logs:
+    StreamLogs: true
+    DeleteOnTerminate: false
+    RetentionInDays: 7
+EOF
+
+# Nginxカスタム設定
+mkdir -p .platform/nginx/conf.d
+
+cat > .platform/nginx/conf.d/custom.conf << 'EOF'
+client_max_body_size 50M;
+proxy_read_timeout 300;
+EOF
+
+# デプロイ
+eb deploy
+
+# 設定確認
+eb config
+```
+
+### 10.4 演習4: デプロイポリシーの変更
+
+```bash
+# Rolling デプロイに変更
+aws elasticbeanstalk update-environment \
+  --environment-name prod-env \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:command,OptionName=DeploymentPolicy,Value=Rolling \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSizeType,Value=Percentage \
+    Namespace=aws:elasticbeanstalk:command,OptionName=BatchSize,Value=50
+
+# 設定変更の確認
+aws elasticbeanstalk describe-configuration-settings \
+  --application-name my-eb-app \
+  --environment-name prod-env \
+  --query "ConfigurationSettings[0].OptionSettings[?Namespace=='aws:elasticbeanstalk:command'].{Option:OptionName,Value:Value}" \
+  --output table
+
+# アプリを更新してデプロイ（Rollingの動作確認）
+# app.js の APP_VERSION を更新
+eb deploy --message "Rolling deploy test v2.1.0"
+
+# デプロイイベント監視
+eb events -f
+```
+
+### 10.5 演習5: Blue/Green デプロイ
+
+```bash
+# 1. 新バージョンのアプリケーションを作成
+cat > app.js << 'APPEOF'
+const http = require('http');
+const port = process.env.PORT || 8080;
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200);
+    res.end('OK');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`
+    <h1>Elastic Beanstalk Demo - V3 (Green)</h1>
+    <p>Version: 3.0.0</p>
+    <p>Hostname: ${require('os').hostname()}</p>
+  `);
+});
+
+server.listen(port);
+APPEOF
+
+# 2. ソースバンドルの作成とアップロード
+zip -r app-v3.zip app.js package.json .ebextensions/ .platform/
+
+aws s3 cp app-v3.zip s3://elasticbeanstalk-ap-northeast-1-123456789012/my-eb-app/app-v3.zip
+
+# 3. アプリケーションバージョンの作成
+aws elasticbeanstalk create-application-version \
+  --application-name my-eb-app \
+  --version-label v3.0.0 \
+  --source-bundle S3Bucket=elasticbeanstalk-ap-northeast-1-123456789012,S3Key=my-eb-app/app-v3.zip
+
+# 4. Green環境の作成
+eb create green-env \
+  --version v3.0.0 \
+  --instance_type t3.micro \
+  --elb-type application \
+  --scale 2
+
+# 5. Green環境のヘルスチェック
+aws elasticbeanstalk describe-environments \
+  --environment-names green-env \
+  --query "Environments[0].{Health:Health,HealthStatus:HealthStatus,CNAME:CNAME}"
+
+# 6. CNAME swap
+aws elasticbeanstalk swap-environment-cnames \
+  --source-environment-name prod-env \
+  --destination-environment-name green-env
+
+# 7. 確認
+aws elasticbeanstalk describe-environments \
+  --environment-names prod-env green-env \
+  --query "Environments[].{Name:EnvironmentName,CNAME:CNAME,Version:VersionLabel}" \
+  --output table
+
+# 8. 問題があればロールバック（再度swap）
+# aws elasticbeanstalk swap-environment-cnames \
+#   --source-environment-name prod-env \
+#   --destination-environment-name green-env
+```
+
+### 10.6 演習6: Worker環境
+
+```bash
+# 1. Workerアプリケーションの作成
+mkdir my-worker && cd my-worker
+
+cat > app.js << 'EOF'
+const http = require('http');
+const port = process.env.PORT || 8080;
+
+const server = http.createServer((req, res) => {
+  if (req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      console.log('Received message:', body);
+      console.log('Headers:', JSON.stringify(req.headers));
+
+      // メッセージ処理
+      try {
+        const message = JSON.parse(body);
+        console.log('Processing:', message);
+        // 処理ロジック...
+        res.writeHead(200);
+        res.end('OK');
+      } catch (e) {
+        console.error('Processing error:', e);
+        res.writeHead(500);
+        res.end('Error');
+      }
+    });
+  } else {
+    res.writeHead(200);
+    res.end('Worker is running');
+  }
+});
+
+server.listen(port, () => {
+  console.log(`Worker listening on port ${port}`);
+});
+EOF
+
+# 2. cron.yaml の作成
+cat > cron.yaml << 'EOF'
+version: 1
+cron:
+  - name: "hourly-cleanup"
+    url: "/scheduled/cleanup"
+    schedule: "0 * * * *"
+  - name: "daily-report"
+    url: "/scheduled/report"
+    schedule: "0 9 * * *"
+EOF
+
+# 3. Worker環境の作成
+eb init my-worker-app --platform "Node.js 20" --region ap-northeast-1
+eb create worker-env --tier worker --instance_type t3.micro
+
+# 4. テスト: SQSにメッセージを送信
+QUEUE_URL=$(aws elasticbeanstalk describe-configuration-settings \
+  --application-name my-worker-app \
+  --environment-name worker-env \
+  --query "ConfigurationSettings[0].OptionSettings[?OptionName=='WorkerQueueURL'].Value" \
+  --output text)
+
+aws sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-body '{"task":"process","data":{"id":123}}'
+
+# 5. ログ確認
+eb logs --all
+```
+
+### 10.7 クリーンアップ
+
+```bash
+# Beanstalk環境の削除
+eb terminate prod-env --force
+eb terminate green-env --force
+eb terminate worker-env --force
+
+# アプリケーションの削除
+aws elasticbeanstalk delete-application \
+  --application-name my-eb-app \
+  --terminate-env-by-force
+
+aws elasticbeanstalk delete-application \
+  --application-name my-worker-app \
+  --terminate-env-by-force
+
+# EventBridgeルールの削除（us-east-1）
+aws events remove-targets \
+  --region us-east-1 \
+  --rule "trusted-advisor-security-alert" \
+  --ids "sns-notification"
+
+aws events delete-rule \
+  --region us-east-1 \
+  --name "trusted-advisor-security-alert"
+```
+
+---
+
+## 11. DOP試験対策チェックリスト
+
+### Trusted Advisor基本
+
+- [ ] Trusted Advisorの5つのカテゴリを全て挙げられる
+- [ ] サポートプラン別に利用可能なチェックの違いを理解している
+- [ ] Basic/Developerプランで利用できるチェック項目を知っている
+
+<details>
+<summary>模範解答を見る</summary>
+
+**5つのカテゴリ**:
+1. **コスト最適化**: 未使用EIP、低使用率EC2、アイドルRDS/LB
+2. **パフォーマンス**: 高使用率EC2、CloudFront最適化
+3. **セキュリティ**: SGの0.0.0.0/0、S3パブリック、IAMキーローテーション、MFA
+4. **耐障害性**: EBSスナップショット、RDSマルチAZ、ASGマルチAZ
+5. **サービス制限**: VPC、EIP、EC2インスタンス数（80%超で警告）
+
+**プラン別の違い**:
+- Basic/Developer: コアセキュリティチェック（6項目）+ サービス制限のみ
+- Business/Enterprise: 全チェック項目 + API + EventBridge連携 + プログラマティックリフレッシュ
+
+**Basic/Developerで利用可能**:
+- SGの無制限アクセス（特定ポート）
+- S3バケットのパブリックアクセス
+- ルートアカウントのMFA
+- IAM使用状況
+- EBSパブリックスナップショット
+- RDSパブリックスナップショット
+- サービス制限
+</details>
+
+### Trusted Advisor + EventBridge
+
+- [ ] EventBridgeルールの設定場所（リージョン）を知っている
+- [ ] Trusted Advisorのイベント構造を理解している
+- [ ] 自動修復アーキテクチャを設計できる
+
+<details>
+<summary>模範解答を見る</summary>
+
+**EventBridgeルールのリージョン**:
+- **us-east-1 (N. Virginia) でのみ設定可能**（最頻出ポイント）
+- Trusted AdvisorのイベントはグローバルサービスとしてN. Virginiaに送信される
+
+**イベント構造**:
+```json
+{
+  "source": "aws.trustedadvisor",
+  "detail-type": "Trusted Advisor Check Item Refresh Notification",
+  "detail": {
+    "check-name": "チェック名",
+    "status": "WARN|ERROR|OK",
+    "check-item-detail": { ... }
+  }
+}
+```
+
+**自動修復アーキテクチャ**:
+```
+Trusted Advisor → EventBridge (us-east-1)
+  → Lambda（自動修復）→ EC2 API（SG修正等）
+  → SNS（通知）→ メール/Slack
+  → Systems Manager（パッチ適用等）
+```
+</details>
+
+### Organization単位のTrusted Advisor
+
+- [ ] 組織ビューの有効化方法を知っている
+- [ ] レポートの出力先と分析方法を理解している
+- [ ] Trusted Advisor Priorityの特徴を説明できる
+
+<details>
+<summary>模範解答を見る</summary>
+
+**組織ビュー**:
+- Management Accountで有効化
+- 組織全体のチェック結果を集約・可視化
+- S3にJSON/CSVレポートを出力
+- QuickSightやAthenaで分析可能
+
+**レポート分析**:
+1. S3にレポートを出力
+2. Athenaでテーブル作成（JSON SerDe）
+3. SQLでカテゴリ別・アカウント別の問題数を集計
+4. QuickSightで可視化
+
+**Trusted Advisor Priority**:
+- Enterprise サポート限定
+- TAM（テクニカルアカウントマネージャ）が優先順位付け
+- AWS Health と統合
+- 組織全体のリスクを優先度順に表示
+- APIでのプログラマティックアクセス対応
+</details>
+
+### Beanstalkデプロイポリシー
+
+- [ ] 6つのデプロイポリシーの特徴と違いを説明できる
+- [ ] ダウンタイムが発生するポリシーを特定できる
+- [ ] 各ポリシーのロールバック方法を知っている
+
+<details>
+<summary>模範解答を見る</summary>
+
+**6つのデプロイポリシー**:
+
+| ポリシー | ダウンタイム | ロールバック | キャパシティ |
+|---------|:----------:|:----------:|:----------:|
+| All at once | あり | 再デプロイ | 減少 |
+| Rolling | なし | 再デプロイ | 一時減少 |
+| Rolling w/ batch | なし | 再デプロイ | 維持 |
+| Immutable | なし | 新ASG削除 | 倍増 |
+| Traffic splitting | なし | 新ASG削除 | 倍増 |
+| Blue/Green | 最小 | CNAME swap | 倍増 |
+
+**ダウンタイムが発生するのは「All at once」のみ**
+
+**ロールバック方法**:
+- All at once / Rolling / Rolling w/ batch: 前バージョンを再デプロイ
+- Immutable / Traffic splitting: 新しいASGを削除するだけ（高速）
+- Blue/Green: CNAME swapを再実行するだけ（最速）
+
+**試験頻出**: 「ダウンタイムなし + 高速ロールバック」→ Immutableが正解
+**試験頻出**: 「完全に独立した環境でテスト」→ Blue/Greenが正解
+</details>
+
+### .ebextensions と Platform Hooks
+
+- [ ] .ebextensionsの主要セクション（packages, files, commands, container_commands）を使い分けできる
+- [ ] commands と container_commands の違いを説明できる
+- [ ] leader_only の用途を理解している
+- [ ] Platform Hooksのディレクトリ構造を知っている
+
+<details>
+<summary>模範解答を見る</summary>
+
+**主要セクション**:
+- `packages`: OS/言語パッケージのインストール（yum, apt, pip, npm）
+- `files`: ファイルの作成（設定ファイル、スクリプト等）
+- `commands`: アプリ展開前のコマンド実行（OS設定等）
+- `container_commands`: アプリ展開後、起動前のコマンド実行（DBマイグレーション等）
+- `option_settings`: Beanstalk設定の変更
+- `Resources`: CloudFormationリソースの追加
+
+**commands vs container_commands**:
+| 項目 | commands | container_commands |
+|------|---------|-------------------|
+| 実行タイミング | アプリ展開前 | アプリ展開後、起動前 |
+| 作業ディレクトリ | / | /var/app/staging/ |
+| アプリコード参照 | 不可 | 可能 |
+
+**leader_only**:
+- ASG内の1つのインスタンス（リーダー）でのみ実行
+- DBマイグレーションなど1回だけ実行すべき処理に使用
+- commands, container_commands 両方で使用可能
+
+**Platform Hooks**:
+```
+.platform/
+├── hooks/          ← デプロイ時
+│   ├── prebuild/   ← ビルド前
+│   ├── predeploy/  ← デプロイ前
+│   └── postdeploy/ ← デプロイ後
+└── confighooks/    ← 設定変更時
+    ├── prebuild/
+    ├── predeploy/
+    └── postdeploy/
+```
+</details>
+
+### Beanstalk + Docker
+
+- [ ] Single ContainerとMulti-containerの違いを理解している
+- [ ] Dockerrun.aws.json v1とv2の違いを知っている
+- [ ] ECRからのイメージ取得に必要な設定を説明できる
+
+<details>
+<summary>模範解答を見る</summary>
+
+**Single vs Multi-container**:
+- Single: 1つのDockerコンテナ、Dockerfile or Dockerrun.aws.json v1
+- Multi: 複数のDockerコンテナ、Dockerrun.aws.json v2（ECSタスク定義形式）
+- AL2/AL2023ではDocker Composeも利用可能
+
+**Dockerrun.aws.json**:
+- v1: Single Container用、シンプルなイメージ/ポート指定
+- v2: Multi-container用、ECSタスク定義形式で複数コンテナを定義
+- v2はECSクラスタとして管理される
+
+**ECRイメージ取得に必要な設定**:
+1. EC2インスタンスプロファイルに以下のIAMポリシーを付与:
+   - `ecr:GetAuthorizationToken`
+   - `ecr:BatchCheckLayerAvailability`
+   - `ecr:GetDownloadUrlForLayer`
+   - `ecr:BatchGetImage`
+2. Dockerrun.aws.jsonのImage.NameにECR URIを指定
+</details>
+
+### Worker環境
+
+- [ ] Worker環境のアーキテクチャ（sqsd）を説明できる
+- [ ] cron.yamlの用途と制約を理解している
+- [ ] Dead Letter Queueの動作を説明できる
+
+<details>
+<summary>模範解答を見る</summary>
+
+**Worker環境アーキテクチャ**:
+- SQSキューからメッセージをポーリングするsqsdデーモンが動作
+- sqsdがメッセージをHTTP POSTでlocalhostのアプリに送信
+- アプリが200を返すとメッセージ削除、それ以外は再処理
+- スケーリングはキュー深度ベース
+
+**cron.yaml**:
+- Worker環境で定期タスクを定義
+- リーダーインスタンスがスケジュールを管理
+- SQS経由でメッセージを投入
+- **注意**: 重複実行の可能性があるため、アプリケーション側で冪等性を確保
+
+**Dead Letter Queue (DLQ)**:
+- 処理失敗メッセージの退避先
+- maxReceiveCount（最大受信回数）を超過するとDLQに移動
+- DLQの設定はSQSキュー側で行う（redrive policy）
+- DLQに溜まったメッセージはCloudWatch メトリクスで監視
+</details>
+
+### 試験頻出シナリオ
+
+- [ ] 「ダウンタイムなしで最速デプロイ」→ Rolling
+- [ ] 「ダウンタイムなし + キャパシティ維持」→ Rolling with additional batch
+- [ ] 「ダウンタイムなし + 高速ロールバック」→ Immutable
+- [ ] 「段階的トラフィック移行」→ Traffic splitting
+- [ ] 「完全独立環境でテスト後に切替」→ Blue/Green (CNAME swap)
+- [ ] 「Trusted Advisorでセキュリティ違反を自動検知・修復」→ EventBridge + Lambda (us-east-1)
+- [ ] 「組織全体のベストプラクティス準拠状況を把握」→ Trusted Advisor 組織ビュー
+- [ ] 「DBマイグレーションを1回だけ実行」→ container_commands + leader_only
+
+<details>
+<summary>模範解答を見る</summary>
+
+**シナリオ別の正解パターン**:
+
+1. 「アプリの更新時にダウンタイムを許容できない。ただしコストは最小限にしたい」
+   → **Rolling**: キャパシティは一時的に減少するが追加コストなし
+
+2. 「本番環境のキャパシティを維持しながらデプロイしたい」
+   → **Rolling with additional batch**: 新バッチを追加してからローリング
+
+3. 「デプロイ失敗時に即座にロールバックしたい」
+   → **Immutable**: 新ASGを削除するだけで即時ロールバック
+
+4. 「新バージョンに少量のトラフィックを流して検証したい」
+   → **Traffic splitting**: ALBのWeighted Target Groupで段階的移行
+
+5. 「完全に独立した環境でテストしてからURLを切り替えたい」
+   → **Blue/Green (CNAME swap)**: 別環境で完全テスト後にCNAME交換
+
+6. 「SGの0.0.0.0/0を自動検知して修復したい」
+   → **Trusted Advisor + EventBridge (us-east-1) + Lambda**
+
+7. 「Worker環境でDBマイグレーションを実行したい」
+   → **container_commands + leader_only: true**
+   ```yaml
+   container_commands:
+     01_migrate:
+       command: "python manage.py migrate"
+       leader_only: true
+   ```
+
+8. 「定期的なバッチ処理をBeanstalkで実行したい」
+   → **Worker環境 + cron.yaml**（冪等性に注意）
+</details>
+
+---
+
+## 付録: よく使うCLIコマンド
+
+### Trusted Advisor
+
+```bash
+# チェック一覧
+aws support describe-trusted-advisor-checks --language ja
+
+# チェック結果サマリー
+aws support describe-trusted-advisor-check-summaries --check-ids ID1 ID2
+
+# チェック結果詳細
+aws support describe-trusted-advisor-check-result --check-id ID
+
+# チェックのリフレッシュ
+aws support refresh-trusted-advisor-check --check-id ID
+
+# リフレッシュステータス
+aws support describe-trusted-advisor-check-refresh-statuses --check-ids ID1
+
+# ※ support API は us-east-1 でのみ利用可能
+```
+
+### Elastic Beanstalk
+
+```bash
+# アプリケーション管理
+aws elasticbeanstalk create-application --application-name NAME
+aws elasticbeanstalk describe-applications
+aws elasticbeanstalk delete-application --application-name NAME
+
+# バージョン管理
+aws elasticbeanstalk create-application-version --application-name NAME --version-label LABEL --source-bundle ...
+aws elasticbeanstalk describe-application-versions --application-name NAME
+aws elasticbeanstalk delete-application-version --application-name NAME --version-label LABEL
+
+# 環境管理
+aws elasticbeanstalk create-environment --application-name NAME --environment-name ENV ...
+aws elasticbeanstalk describe-environments --environment-names ENV
+aws elasticbeanstalk update-environment --environment-name ENV --option-settings ...
+aws elasticbeanstalk terminate-environment --environment-name ENV
+aws elasticbeanstalk rebuild-environment --environment-name ENV
+
+# デプロイ
+aws elasticbeanstalk update-environment --environment-name ENV --version-label LABEL
+
+# Blue/Green
+aws elasticbeanstalk swap-environment-cnames --source-environment-name ENV1 --destination-environment-name ENV2
+
+# 設定
+aws elasticbeanstalk describe-configuration-settings --application-name NAME --environment-name ENV
+aws elasticbeanstalk describe-configuration-options --application-name NAME --environment-name ENV
+aws elasticbeanstalk validate-configuration-settings --application-name NAME --option-settings ...
+
+# ヘルス
+aws elasticbeanstalk describe-environment-health --environment-name ENV --attribute-names All
+aws elasticbeanstalk describe-instances-health --environment-name ENV
+
+# イベント
+aws elasticbeanstalk describe-events --environment-name ENV --max-records 20
+
+# EB CLI
+eb init / eb create / eb deploy / eb status / eb health
+eb logs / eb events / eb config / eb open / eb terminate
+```
+
+---
+
+**作成日**: 2026-02-04
+**最終更新**: 2026-02-04
+**検証環境**: AWS ap-northeast-1 リージョン
