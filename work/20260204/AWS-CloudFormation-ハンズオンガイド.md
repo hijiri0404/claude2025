@@ -855,11 +855,216 @@ Resources:
             Method: get
 ```
 
+### 9.5 動的参照（Secrets Manager / Parameter Store）
+
+```yaml
+# Secrets Manager からの動的参照
+Resources:
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: mysql
+      DBInstanceClass: db.t3.micro
+      MasterUsername: '{{resolve:secretsmanager:MyDBSecret:SecretString:username}}'
+      MasterUserPassword: '{{resolve:secretsmanager:MyDBSecret:SecretString:password}}'
+
+# Parameter Store からの動的参照
+Resources:
+  MyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: '{{resolve:ssm:/myapp/config/instance-type}}'
+      # SecureString の場合
+      # SomeSecret: '{{resolve:ssm-secure:/myapp/secrets/api-key}}'
+```
+
+**動的参照の構文:**
+```
+{{resolve:service:reference-key}}
+
+# Secrets Manager
+{{resolve:secretsmanager:secret-id:SecretString:json-key:version-stage:version-id}}
+
+# Parameter Store
+{{resolve:ssm:parameter-name:version}}
+{{resolve:ssm-secure:parameter-name:version}}  # SecureString
+```
+
+**DOP重要ポイント:**
+- スタック作成/更新時に値が解決される
+- テンプレートにシークレットを直接記載しなくて済む
+- バージョン指定で特定バージョンを参照可能
+
 ---
 
-## 10. ハンズオン演習
+## 10. デプロイ戦略
 
-### 10.1 演習1: スタック作成と更新
+### 10.1 CloudFormationでのBlue/Greenデプロイ
+
+```
+【Blue/Green デプロイパターン】
+
+Step 1: Blue環境が本番稼働中
+┌─────────────────┐     ┌─────────────────┐
+│ Route 53 / ALB  │────▶│  Blue Stack     │
+│                 │     │  (現行Version)  │
+└─────────────────┘     └─────────────────┘
+
+Step 2: Green環境を別スタックで作成
+┌─────────────────┐     ┌─────────────────┐
+│ Route 53 / ALB  │────▶│  Blue Stack     │
+│                 │     └─────────────────┘
+│  （まだBlueに   │     ┌─────────────────┐
+│   向いている）  │     │  Green Stack    │
+└─────────────────┘     │  (新Version)    │
+                        └─────────────────┘
+
+Step 3: トラフィックをGreenに切替
+┌─────────────────┐     ┌─────────────────┐
+│ Route 53 / ALB  │     │  Blue Stack     │
+│                 │     └─────────────────┘
+│  （Greenに     │     ┌─────────────────┐
+│   切替完了）    │────▶│  Green Stack    │
+└─────────────────┘     └─────────────────┘
+
+Step 4: Blue環境を削除（またはロールバック用に保持）
+```
+
+### 10.2 Auto Scaling ローリング更新
+
+```yaml
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 2        # 更新中も最低2台稼働
+        MaxBatchSize: 1                  # 1台ずつ更新
+        PauseTime: PT5M                  # 各バッチ後5分待機
+        WaitOnResourceSignals: true      # cfn-signalを待つ
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 4
+      DesiredCapacity: 2
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AMI
+        InstanceType: t3.small
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            # アプリケーションセットアップ...
+
+            # セットアップ完了をシグナル
+            /opt/aws/bin/cfn-signal -e $? \
+              --stack ${AWS::StackName} \
+              --resource AutoScalingGroup \
+              --region ${AWS::Region}
+```
+
+### 10.3 UpdatePolicy オプション
+
+| オプション | 対象リソース | 説明 |
+|-----------|------------|------|
+| **AutoScalingRollingUpdate** | ASG | インスタンスを段階的に置換 |
+| **AutoScalingReplacingUpdate** | ASG | 新ASGを作成して切替 |
+| **AutoScalingScheduledAction** | ASG | スケジュールアクションの保持 |
+| **EnableVersionUpgrade** | OpenSearch/ES | バージョンアップを許可 |
+
+---
+
+## 11. トラブルシューティング
+
+### 11.1 よくあるエラーと対処法
+
+```
+【CREATE_FAILED 時の対処】
+
+1. スタックイベントで失敗原因を特定
+   aws cloudformation describe-stack-events \
+     --stack-name my-stack \
+     --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`]'
+
+2. よくある原因と対処
+   ┌─────────────────────────────────────────────────────────────┐
+   │ エラー                    │ 原因          │ 対処           │
+   ├─────────────────────────────────────────────────────────────┤
+   │ Resource already exists  │ 同名リソース存在│ 名前変更 or    │
+   │                          │               │ 既存削除       │
+   ├─────────────────────────────────────────────────────────────┤
+   │ Limit exceeded           │ クォータ超過   │ 上限緩和申請   │
+   ├─────────────────────────────────────────────────────────────┤
+   │ Access Denied            │ IAM権限不足   │ capabilities   │
+   │                          │               │ 追加 or 権限付与│
+   ├─────────────────────────────────────────────────────────────┤
+   │ Invalid parameter        │ パラメータ誤り │ 値の検証       │
+   ├─────────────────────────────────────────────────────────────┤
+   │ Timeout (CreationPolicy) │ シグナル未受信 │ UserData確認   │
+   │                          │               │ タイムアウト延長│
+   └─────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 ROLLBACK_FAILED からの復旧
+
+```bash
+# ROLLBACK_FAILED状態のスタックを削除可能にする
+
+# 1. 失敗しているリソースを特定
+aws cloudformation describe-stack-resources \
+  --stack-name my-stack \
+  --query 'StackResources[?ResourceStatus==`DELETE_FAILED`].LogicalResourceId'
+
+# 2. 問題リソースをスキップしてスタック削除
+aws cloudformation delete-stack \
+  --stack-name my-stack \
+  --retain-resources LogicalResourceId1 LogicalResourceId2
+
+# 3. 手動でリソースを削除（必要に応じて）
+```
+
+### 11.3 UPDATE_ROLLBACK_FAILED からの復旧
+
+```bash
+# 1. continue-update-rollback でロールバックを再試行
+aws cloudformation continue-update-rollback \
+  --stack-name my-stack
+
+# 2. 特定リソースをスキップしてロールバック
+aws cloudformation continue-update-rollback \
+  --stack-name my-stack \
+  --resources-to-skip LogicalResourceId1
+```
+
+### 11.4 スタック削除が進まない場合
+
+```
+削除が進まない原因:
+1. S3バケットが空でない → オブジェクト削除 or DeletionPolicy: Retain
+2. Exportされた値が参照中 → 参照しているスタックを先に更新
+3. ENIがLambda VPCで使用中 → Lambda削除後しばらく待つ
+4. リソースに依存関係がある → 手動で依存リソースを削除
+5. IAMロールが削除できない → 関連サービスリンクロールを確認
+```
+
+---
+
+## 12. ハンズオン演習
+
+### 12.1 演習1: スタック作成と更新
 
 ```bash
 # テンプレート作成
@@ -1000,17 +1205,307 @@ aws cloudformation describe-stack-resource-drifts \
   --stack-name cfn-handson
 ```
 
-### 10.4 クリーンアップ
+### 12.4 演習4: CreationPolicy と cfn-signal
 
 ```bash
-# スタック削除
+# EC2インスタンスの準備完了を待つテンプレート
+cat > /tmp/cfn-signal.yaml << 'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CreationPolicy and cfn-signal demo
+
+Parameters:
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT15M  # 15分以内にシグナル受信
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              httpd: []
+          files:
+            /var/www/html/index.html:
+              content: |
+                <h1>Hello from CloudFormation!</h1>
+                <p>cfn-init completed successfully.</p>
+              mode: '000644'
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.micro
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum update -y aws-cfn-bootstrap
+
+          # cfn-init を実行
+          /opt/aws/bin/cfn-init -v \
+            --stack ${AWS::StackName} \
+            --resource WebServer \
+            --region ${AWS::Region}
+
+          # 結果をシグナル送信（$? は直前のコマンドの終了コード）
+          /opt/aws/bin/cfn-signal -e $? \
+            --stack ${AWS::StackName} \
+            --resource WebServer \
+            --region ${AWS::Region}
+
+Outputs:
+  PublicIP:
+    Value: !GetAtt WebServer.PublicIp
+EOF
+
+# スタック作成
+aws cloudformation create-stack \
+  --stack-name cfn-signal-demo \
+  --template-body file:///tmp/cfn-signal.yaml \
+  --capabilities CAPABILITY_IAM
+
+# 作成状況の監視（シグナル待ち）
+aws cloudformation describe-stack-events \
+  --stack-name cfn-signal-demo \
+  --query 'StackEvents[?LogicalResourceId==`WebServer`].{Time:Timestamp,Status:ResourceStatus,Reason:ResourceStatusReason}' \
+  --output table
+```
+
+### 12.5 演習5: カスタムリソース（Lambda）
+
+```bash
+# カスタムリソースでS3バケットを空にするテンプレート
+cat > /tmp/cfn-custom.yaml << 'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Custom Resource demo - Empty S3 bucket on delete
+
+Resources:
+  # Lambda実行ロール
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3DeletePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: '*'
+
+  # S3バケットを空にするLambda関数
+  EmptyBucketFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  bucket = event['ResourceProperties']['BucketName']
+
+                  if event['RequestType'] == 'Delete':
+                      s3 = boto3.resource('s3')
+                      bucket_obj = s3.Bucket(bucket)
+                      # バージョニング有効の場合も考慮
+                      bucket_obj.object_versions.delete()
+                      print(f"Emptied bucket: {bucket}")
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+  # テスト用S3バケット
+  TestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "cfn-custom-demo-${AWS::AccountId}"
+
+  # カスタムリソース（スタック削除時にバケットを空にする）
+  EmptyBucketOnDelete:
+    Type: Custom::EmptyBucket
+    Properties:
+      ServiceToken: !GetAtt EmptyBucketFunction.Arn
+      BucketName: !Ref TestBucket
+
+Outputs:
+  BucketName:
+    Value: !Ref TestBucket
+EOF
+
+# スタック作成
+aws cloudformation create-stack \
+  --stack-name cfn-custom-demo \
+  --template-body file:///tmp/cfn-custom.yaml \
+  --capabilities CAPABILITY_IAM
+
+# テストファイルをアップロード
+aws cloudformation wait stack-create-complete --stack-name cfn-custom-demo
+BUCKET=$(aws cloudformation describe-stacks --stack-name cfn-custom-demo \
+  --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' --output text)
+echo "test" | aws s3 cp - s3://${BUCKET}/test.txt
+
+# スタック削除（カスタムリソースがバケットを空にしてから削除）
+aws cloudformation delete-stack --stack-name cfn-custom-demo
+```
+
+### 12.6 演習6: リソースインポート
+
+```bash
+# 1. 既存のS3バケットを作成（CloudFormation外）
+IMPORT_BUCKET="cfn-import-demo-$(aws sts get-caller-identity --query Account --output text)"
+aws s3 mb s3://${IMPORT_BUCKET}
+
+# 2. インポート用テンプレート作成
+cat > /tmp/cfn-import.yaml << EOF
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Import existing resources demo
+
+Resources:
+  ImportedBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain  # インポート時はRetain推奨
+    Properties:
+      BucketName: ${IMPORT_BUCKET}
+
+Outputs:
+  BucketArn:
+    Value: !GetAtt ImportedBucket.Arn
+EOF
+
+# 3. インポート用Change Set作成
+aws cloudformation create-change-set \
+  --stack-name cfn-import-demo \
+  --change-set-name import-bucket \
+  --change-set-type IMPORT \
+  --template-body file:///tmp/cfn-import.yaml \
+  --resources-to-import "[{
+    \"ResourceType\": \"AWS::S3::Bucket\",
+    \"LogicalResourceId\": \"ImportedBucket\",
+    \"ResourceIdentifier\": {
+      \"BucketName\": \"${IMPORT_BUCKET}\"
+    }
+  }]"
+
+# 4. Change Set確認
+aws cloudformation describe-change-set \
+  --stack-name cfn-import-demo \
+  --change-set-name import-bucket
+
+# 5. インポート実行
+aws cloudformation execute-change-set \
+  --stack-name cfn-import-demo \
+  --change-set-name import-bucket
+
+# 6. インポート後の確認
+aws cloudformation describe-stack-resources \
+  --stack-name cfn-import-demo
+
+# クリーンアップ（DeletionPolicy: Retainなのでバケットは残る）
+aws cloudformation delete-stack --stack-name cfn-import-demo
+aws s3 rb s3://${IMPORT_BUCKET}
+```
+
+### 12.7 演習7: StackSets（Organizations使用時）
+
+```bash
+# 注意: Organizations環境が必要
+
+# 1. StackSet作成
+aws cloudformation create-stack-set \
+  --stack-set-name security-baseline-demo \
+  --template-body file:///tmp/security-baseline.yaml \
+  --permission-model SERVICE_MANAGED \
+  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# 2. スタックインスタンスを特定OUに展開
+aws cloudformation create-stack-instances \
+  --stack-set-name security-baseline-demo \
+  --deployment-targets OrganizationalUnitIds=ou-xxxx-xxxxxxxx \
+  --regions ap-northeast-1 us-east-1 \
+  --operation-preferences \
+    FailureTolerancePercentage=10,MaxConcurrentPercentage=25
+
+# 3. 展開状況確認
+aws cloudformation list-stack-instances \
+  --stack-set-name security-baseline-demo \
+  --query 'Summaries[].{Account:Account,Region:Region,Status:Status}'
+
+# 4. StackSet更新
+aws cloudformation update-stack-set \
+  --stack-set-name security-baseline-demo \
+  --template-body file:///tmp/security-baseline-v2.yaml
+
+# 5. クリーンアップ
+aws cloudformation delete-stack-instances \
+  --stack-set-name security-baseline-demo \
+  --deployment-targets OrganizationalUnitIds=ou-xxxx-xxxxxxxx \
+  --regions ap-northeast-1 us-east-1 \
+  --no-retain-stacks
+
+aws cloudformation delete-stack-set \
+  --stack-set-name security-baseline-demo
+```
+
+### 12.8 クリーンアップ
+
+```bash
+# 演習1-3のスタック削除
 aws cloudformation delete-stack --stack-name cfn-handson
 aws cloudformation wait stack-delete-complete --stack-name cfn-handson
+
+# 演習4のスタック削除
+aws cloudformation delete-stack --stack-name cfn-signal-demo
+
+# 演習5のスタック削除
+aws cloudformation delete-stack --stack-name cfn-custom-demo
 ```
 
 ---
 
-## 11. DOP試験対策チェックリスト
+## 13. DOP試験対策チェックリスト
 
 ### テンプレート基礎
 
@@ -1169,6 +1664,96 @@ aws cloudformation wait stack-delete-complete --stack-name cfn-handson
 - Exportされた値を参照するスタックがあると、Exportを含むスタックの削除/更新不可
 - クロスリージョンのImportは不可
 - 循環参照は不可
+</details>
+
+### ヘルパースクリプト・カスタムリソース
+
+- [ ] CreationPolicyとcfn-signalの使い方を理解している
+- [ ] WaitConditionの用途を説明できる
+- [ ] カスタムリソースの実装パターンを知っている
+
+<details>
+<summary>📝 模範解答を見る</summary>
+
+**CreationPolicy + cfn-signal**:
+- EC2インスタンスの準備完了を待つ
+- Timeout時間内にcfn-signalが送信されないとCREATE_FAILED
+- Count: 複数シグナルを待つ場合（ASGで複数インスタンス）
+- UserData内で`cfn-signal -e $?`を実行
+
+**WaitCondition**:
+- 複数リソース間の同期
+- 外部プロセスからのシグナル待機
+- CreationPolicyより柔軟（データの受け渡しも可能）
+
+**カスタムリソース**:
+- CloudFormation非対応リソースの管理
+- スタック削除前のクリーンアップ処理
+- 外部APIとの連携
+- Lambda関数が`cfnresponse.send()`で結果を返す
+</details>
+
+### 動的参照・リソースインポート
+
+- [ ] Secrets Manager/Parameter Storeの動的参照構文を書ける
+- [ ] リソースインポートの手順と制約を理解している
+
+<details>
+<summary>📝 模範解答を見る</summary>
+
+**動的参照構文**:
+```yaml
+# Secrets Manager
+'{{resolve:secretsmanager:secret-id:SecretString:json-key}}'
+
+# Parameter Store
+'{{resolve:ssm:/path/to/param}}'
+'{{resolve:ssm-secure:/path/to/secure-param}}'
+```
+
+**リソースインポート**:
+1. テンプレートに既存リソースの定義を追加（DeletionPolicy: Retain推奨）
+2. `create-change-set --change-set-type IMPORT --resources-to-import`
+3. Change Set実行
+4. リソースがスタック管理下に入る
+
+制約:
+- 一度に1リソースタイプのみインポート可能
+- 全プロパティを正確に指定する必要あり
+- インポート後にプロパティ変更はできない（別途更新が必要）
+</details>
+
+### トラブルシューティング
+
+- [ ] ROLLBACK_FAILED/UPDATE_ROLLBACK_FAILEDからの復旧方法を知っている
+- [ ] スタック削除が進まない場合の対処法を説明できる
+
+<details>
+<summary>📝 模範解答を見る</summary>
+
+**ROLLBACK_FAILED からの復旧**:
+```bash
+# 問題リソースをスキップして削除
+aws cloudformation delete-stack \
+  --stack-name my-stack \
+  --retain-resources FailedResource1 FailedResource2
+```
+
+**UPDATE_ROLLBACK_FAILED からの復旧**:
+```bash
+# ロールバックを続行
+aws cloudformation continue-update-rollback --stack-name my-stack
+
+# 特定リソースをスキップ
+aws cloudformation continue-update-rollback \
+  --stack-name my-stack \
+  --resources-to-skip FailedResource
+```
+
+**削除が進まない原因**:
+- S3バケットが空でない → カスタムリソースで削除 or 手動削除
+- Export値が参照中 → 参照スタックを先に更新
+- Lambda VPC ENIが残存 → 時間経過で自動削除（最大40分）
 </details>
 
 ---
