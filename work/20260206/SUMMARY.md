@@ -13,8 +13,9 @@
 | `ArgoCD-CICD-ハンズオンガイド.md` | 1,198行 | GitOpsによるKubernetesデプロイ、EKS統合、ApplicationSet、マルチクラスタ管理、CI/CD統合 |
 | `AWS-EKS-ハンズオンガイド.md` | 1,469行 | クラスター作成、ノードグループ、Fargate、IRSA、ALB Controller、オートスケーリング、セキュリティ |
 | `AWS-ROSA-ハンズオンガイド.md` | 1,465行 | OpenShift on AWS、HCP、S2I、SCC、OperatorHub、運用管理、EKS比較 |
+| `Kubernetes-ハンズオンガイド.md` | 2,423行 | Pod、Deployment、Service、ConfigMap/Secret、PV/PVC、RBAC、NetworkPolicy、Helm |
 
-**本日合計**: 4,132行
+**本日合計**: 6,555行
 
 ## 🎯 完了したタスク
 
@@ -56,6 +57,25 @@
 - [x] マシンプール管理とアップグレード
 - [x] 7つのハンズオン演習
 - [x] 6問のDOP試験対策Q&A
+
+### Kubernetes ハンズオンガイド
+- [x] K8sアーキテクチャ（コントロールプレーン/ワーカーノード）
+- [x] Pod（ライフサイクル、Probe、Init Container）
+- [x] ReplicaSet / Deployment（ローリングアップデート、ロールバック）
+- [x] Service（ClusterIP、NodePort、LoadBalancer、Headless）
+- [x] ConfigMap / Secret（環境変数、ボリュームマウント）
+- [x] Volume / PersistentVolume / PVC / StorageClass
+- [x] Namespace / ResourceQuota / LimitRange
+- [x] StatefulSet / DaemonSet / Job / CronJob
+- [x] Ingress（パスベース/ホストベースルーティング）
+- [x] RBAC（Role、ClusterRole、Binding、ServiceAccount）
+- [x] NetworkPolicy（Ingress/Egress制御）
+- [x] Pod Security Standards（Privileged/Baseline/Restricted）
+- [x] Scheduling（nodeSelector、Affinity、Taints/Tolerations）
+- [x] Helm（チャート管理、リリース操作）
+- [x] トラブルシューティング
+- [x] 7つのハンズオン演習
+- [x] 10問のDOP試験対策Q&A
 
 ## 📊 DOP-C02関連ドメイン
 
