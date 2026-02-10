@@ -1159,6 +1159,885 @@ system-a-infra リポジトリ
             └── prod環境にデプロイ
 ```
 
+### AWS CLIによるマルチ環境一括構築 完全手順
+
+上記の推奨構成を**AWS CLIだけで**ゼロから構築する完全手順です。
+1つのスクリプトでリポジトリ作成 → テンプレート配置 → IAMロール → CodeBuild → CodePipeline まで一気に構築します。
+
+> **注意**: 本番利用時はIAMポリシーを最小権限に絞ってください（本手順は学習用にFullAccess系を使用）。
+
+#### Step 0: 変数設定
+
+```bash
+#!/bin/bash
+set -e
+
+# === 基本変数 ===
+SYSTEM_NAME="system-a"
+REGION=${AWS_REGION:-ap-northeast-1}
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REPO_NAME="${SYSTEM_NAME}-infra"
+ARTIFACT_BUCKET="codepipeline-${REGION}-${ACCOUNT_ID}"
+
+echo "Account: ${ACCOUNT_ID}, Region: ${REGION}, System: ${SYSTEM_NAME}"
+```
+
+#### Step 1: CodeCommitリポジトリ作成とディレクトリ構成
+
+```bash
+# === 1. CodeCommitリポジトリ作成 ===
+aws codecommit create-repository \
+  --repository-name ${REPO_NAME} \
+  --repository-description "${SYSTEM_NAME} infrastructure as code" \
+  2>/dev/null || echo "Repository already exists"
+
+# === 2. ローカルにクローン ===
+REPO_URL=$(aws codecommit get-repository \
+  --repository-name ${REPO_NAME} \
+  --query 'repositoryMetadata.cloneUrlHttp' --output text)
+WORK_DIR=$(mktemp -d)
+cd ${WORK_DIR}
+git init
+mkdir -p environments stacks scripts
+
+echo "Working in: ${WORK_DIR}"
+```
+
+#### Step 2: 環境設定ファイル作成（dev / stg / prod）
+
+```bash
+# === dev.json ===
+cat > environments/dev.json << 'EOF'
+{
+  "environment": "dev",
+  "systemName": "system-a",
+  "stackPrefix": "system-a-dev",
+  "parameters": {
+    "Environment": "dev",
+    "SystemName": "system-a",
+    "AlarmEmail": ""
+  },
+  "stackOrder": [
+    "01-network",
+    "02-security",
+    "03-storage"
+  ]
+}
+EOF
+
+# === stg.json ===
+cat > environments/stg.json << 'EOF'
+{
+  "environment": "stg",
+  "systemName": "system-a",
+  "stackPrefix": "system-a-stg",
+  "parameters": {
+    "Environment": "stg",
+    "SystemName": "system-a",
+    "AlarmEmail": ""
+  },
+  "stackOrder": [
+    "01-network",
+    "02-security",
+    "03-storage"
+  ]
+}
+EOF
+
+# === prod.json ===
+cat > environments/prod.json << 'EOF'
+{
+  "environment": "prod",
+  "systemName": "system-a",
+  "stackPrefix": "system-a-prod",
+  "parameters": {
+    "Environment": "prod",
+    "SystemName": "system-a",
+    "AlarmEmail": "ops-team@example.com"
+  },
+  "stackOrder": [
+    "01-network",
+    "02-security",
+    "03-storage"
+  ]
+}
+EOF
+```
+
+#### Step 3: CloudFormation テンプレート作成
+
+```bash
+# === 01-network.yaml（VPC + Subnet + IGW + RouteTable） ===
+cat > stacks/01-network.yaml << 'YAML'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: !Sub 'Network Stack for ${SystemName}-${Environment}'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  SystemName:
+    Type: String
+    Default: system-a
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+  IsStg: !Equals [!Ref Environment, stg]
+
+Mappings:
+  CidrMap:
+    dev:
+      VpcCidr: 10.2.0.0/16
+      Public1: 10.2.1.0/24
+      Public2: 10.2.2.0/24
+      Private1: 10.2.11.0/24
+      Private2: 10.2.12.0/24
+    stg:
+      VpcCidr: 10.1.0.0/16
+      Public1: 10.1.1.0/24
+      Public2: 10.1.2.0/24
+      Private1: 10.1.11.0/24
+      Private2: 10.1.12.0/24
+    prod:
+      VpcCidr: 10.0.0.0/16
+      Public1: 10.0.1.0/24
+      Public2: 10.0.2.0/24
+      Private1: 10.0.11.0/24
+      Private2: 10.0.12.0/24
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, VpcCidr]
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-igw'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-public-rt'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, Public1]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-public-1'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, Public2]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-public-2'
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, Private1]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-private-1'
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, Private2]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-private-2'
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-VpcId'
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-PublicSubnet1Id'
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-PublicSubnet2Id'
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-PrivateSubnet1Id'
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-PrivateSubnet2Id'
+YAML
+
+# === 02-security.yaml（IAM + SecurityGroup） ===
+cat > stacks/02-security.yaml << 'YAML'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: !Sub 'Security Stack for ${SystemName}-${Environment}'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  SystemName:
+    Type: String
+    Default: system-a
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${SystemName}-${Environment} application SG'
+      VpcId: !ImportValue
+        Fn::Sub: '${SystemName}-${Environment}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from anywhere
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from anywhere
+      Tags:
+        - Key: Name
+          Value: !Sub '${SystemName}-${Environment}-app-sg'
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${SystemName}-${Environment}-app-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-AppSGId'
+  AppRoleArn:
+    Value: !GetAtt AppRole.Arn
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-AppRoleArn'
+YAML
+
+# === 03-storage.yaml（S3 + DynamoDB） ===
+cat > stacks/03-storage.yaml << 'YAML'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: !Sub 'Storage Stack for ${SystemName}-${Environment}'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  SystemName:
+    Type: String
+    Default: system-a
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${SystemName}-${Environment}-data-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: !If [IsProd, Enabled, Suspended]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${SystemName}-${Environment}-app-data'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-DataBucketName'
+  AppTableName:
+    Value: !Ref AppTable
+    Export:
+      Name: !Sub '${SystemName}-${Environment}-AppTableName'
+YAML
+```
+
+#### Step 4: buildspec.yml 作成（動的stackOrder版）
+
+```bash
+cat > buildspec.yml << 'YAML'
+version: 0.2
+
+env:
+  variables:
+    ENVIRONMENT: "dev"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - yum install -y jq || true
+
+  pre_build:
+    commands:
+      - export CONFIG_FILE="environments/${ENVIRONMENT}.json"
+      - export STACK_PREFIX=$(jq -r '.stackPrefix' $CONFIG_FILE)
+      - export SYSTEM_NAME=$(jq -r '.systemName' $CONFIG_FILE)
+      - echo "========================================="
+      - echo "Deploying ${STACK_PREFIX} (env=${ENVIRONMENT})"
+      - echo "========================================="
+
+  build:
+    commands:
+      - |
+        CONFIG_FILE="environments/${ENVIRONMENT}.json"
+        STACK_PREFIX=$(jq -r '.stackPrefix' $CONFIG_FILE)
+        SYSTEM_NAME=$(jq -r '.systemName' $CONFIG_FILE)
+        TOTAL=$(jq -r '.stackOrder | length' $CONFIG_FILE)
+        COUNT=0
+
+        for STACK in $(jq -r '.stackOrder[]' $CONFIG_FILE); do
+          COUNT=$((COUNT + 1))
+          TEMPLATE_FILE="stacks/${STACK}.yaml"
+          STACK_NAME="${STACK_PREFIX}-${STACK#*-}"
+
+          echo "=== [${COUNT}/${TOTAL}] Deploying ${STACK_NAME} ==="
+
+          if [ ! -f "$TEMPLATE_FILE" ]; then
+            echo "ERROR: Template not found: $TEMPLATE_FILE"
+            exit 1
+          fi
+
+          aws cloudformation deploy \
+            --template-file $TEMPLATE_FILE \
+            --stack-name $STACK_NAME \
+            --parameter-overrides \
+              Environment=${ENVIRONMENT} \
+              SystemName=${SYSTEM_NAME} \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+          echo "=== ${STACK_NAME} completed ==="
+        done
+
+  post_build:
+    commands:
+      - echo "All ${TOTAL} stacks deployed for ${ENVIRONMENT}"
+      - echo "Stack list:"
+      - jq -r '.stackOrder[]' "environments/${ENVIRONMENT}.json"
+YAML
+```
+
+#### Step 5: 初期コミットしてCodeCommitにプッシュ
+
+```bash
+# README作成
+cat > README.md << EOF
+# ${SYSTEM_NAME}-infra
+
+Infrastructure as Code for ${SYSTEM_NAME}.
+
+## Environments
+- dev: 開発環境 (自動デプロイ)
+- stg: ステージング環境 (手動承認あり)
+- prod: 本番環境 (手動承認あり)
+
+## Stack Order
+1. 01-network - VPC, Subnet, IGW, RouteTable
+2. 02-security - IAM Role, Security Group
+3. 03-storage  - S3, DynamoDB
+EOF
+
+# Git初期化とプッシュ
+git add .
+git commit -m "Initial commit: multi-env infrastructure setup"
+git branch -M main
+git remote add origin ${REPO_URL}
+git push -u origin main
+cd -
+
+echo "Repository pushed: ${REPO_URL}"
+```
+
+#### Step 6: S3アーティファクトバケット作成
+
+```bash
+# パイプラインのアーティファクト保管用
+aws s3api create-bucket \
+  --bucket ${ARTIFACT_BUCKET} \
+  --region ${REGION} \
+  --create-bucket-configuration LocationConstraint=${REGION} \
+  2>/dev/null || echo "Bucket already exists"
+
+aws s3api put-bucket-versioning \
+  --bucket ${ARTIFACT_BUCKET} \
+  --versioning-configuration Status=Enabled
+```
+
+#### Step 7: IAMロール作成
+
+```bash
+# --- CodeBuild用ロール ---
+CODEBUILD_TRUST='{
+  "Version":"2012-10-17",
+  "Statement":[{
+    "Effect":"Allow",
+    "Principal":{"Service":"codebuild.amazonaws.com"},
+    "Action":"sts:AssumeRole"
+  }]
+}'
+
+for ENV in dev stg prod; do
+  ROLE_NAME="${SYSTEM_NAME}-${ENV}-codebuild-role"
+
+  aws iam create-role \
+    --role-name ${ROLE_NAME} \
+    --assume-role-policy-document "${CODEBUILD_TRUST}" \
+    2>/dev/null || echo "Role ${ROLE_NAME} already exists"
+
+  # 学習用: FullAccess（本番は最小権限に変更すること）
+  for POLICY in AmazonS3FullAccess CloudWatchLogsFullAccess \
+                AWSCloudFormationFullAccess AmazonVPCFullAccess \
+                AmazonDynamoDBFullAccess IAMFullAccess; do
+    aws iam attach-role-policy \
+      --role-name ${ROLE_NAME} \
+      --policy-arn arn:aws:iam::aws:policy/${POLICY} 2>/dev/null || true
+  done
+
+  echo "Created: ${ROLE_NAME}"
+done
+
+# --- CodePipeline用ロール ---
+PIPELINE_TRUST='{
+  "Version":"2012-10-17",
+  "Statement":[{
+    "Effect":"Allow",
+    "Principal":{"Service":"codepipeline.amazonaws.com"},
+    "Action":"sts:AssumeRole"
+  }]
+}'
+
+for ENV in dev stg prod; do
+  ROLE_NAME="${SYSTEM_NAME}-${ENV}-pipeline-role"
+
+  aws iam create-role \
+    --role-name ${ROLE_NAME} \
+    --assume-role-policy-document "${PIPELINE_TRUST}" \
+    2>/dev/null || echo "Role ${ROLE_NAME} already exists"
+
+  for POLICY in AWSCodeCommitFullAccess AWSCodeBuildDeveloperAccess \
+                AmazonS3FullAccess; do
+    aws iam attach-role-policy \
+      --role-name ${ROLE_NAME} \
+      --policy-arn arn:aws:iam::aws:policy/${POLICY} 2>/dev/null || true
+  done
+
+  echo "Created: ${ROLE_NAME}"
+done
+
+echo "Waiting 15s for IAM propagation..."
+sleep 15
+```
+
+#### Step 8: CodeBuildプロジェクト作成（環境ごと）
+
+```bash
+for ENV in dev stg prod; do
+  PROJECT_NAME="${SYSTEM_NAME}-${ENV}-build"
+  ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${SYSTEM_NAME}-${ENV}-codebuild-role"
+
+  aws codebuild create-project \
+    --name ${PROJECT_NAME} \
+    --source "type=CODECOMMIT,location=https://git-codecommit.${REGION}.amazonaws.com/v1/repos/${REPO_NAME}" \
+    --environment "type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0,environmentVariables=[{name=ENVIRONMENT,value=${ENV},type=PLAINTEXT}]" \
+    --service-role "${ROLE_ARN}" \
+    --artifacts "type=NO_ARTIFACTS" \
+    --logs-config "cloudWatchLogs={status=ENABLED,groupName=/codebuild/${SYSTEM_NAME}-${ENV}}" \
+    2>/dev/null || echo "Project ${PROJECT_NAME} already exists"
+
+  echo "Created CodeBuild: ${PROJECT_NAME}"
+done
+```
+
+#### Step 9: CodePipelineの作成（dev: 自動 / stg・prod: 承認付き）
+
+```bash
+# === dev パイプライン（手動承認なし、自動デプロイ） ===
+create_pipeline() {
+  local ENV=$1
+  local APPROVAL=$2  # "true" or "false"
+  local PIPELINE_NAME="${SYSTEM_NAME}-${ENV}-pipeline"
+  local BUILD_PROJECT="${SYSTEM_NAME}-${ENV}-build"
+  local ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${SYSTEM_NAME}-${ENV}-pipeline-role"
+
+  # ステージ定義の組み立て
+  STAGES='[
+    {
+      "name": "Source",
+      "actions": [{
+        "name": "Source",
+        "actionTypeId": {
+          "category": "Source", "owner": "AWS",
+          "provider": "CodeCommit", "version": "1"
+        },
+        "configuration": {
+          "RepositoryName": "'"${REPO_NAME}"'",
+          "BranchName": "main",
+          "PollForSourceChanges": "false"
+        },
+        "outputArtifacts": [{"name": "SourceOutput"}]
+      }]
+    },
+    {
+      "name": "Build",
+      "actions": [{
+        "name": "Build",
+        "actionTypeId": {
+          "category": "Build", "owner": "AWS",
+          "provider": "CodeBuild", "version": "1"
+        },
+        "configuration": {
+          "ProjectName": "'"${BUILD_PROJECT}"'"
+        },
+        "inputArtifacts": [{"name": "SourceOutput"}]
+      }]
+    }'
+
+  # stg/prodは手動承認ステージを追加
+  if [ "${APPROVAL}" = "true" ]; then
+    STAGES="${STAGES},"'
+    {
+      "name": "Approval",
+      "actions": [{
+        "name": "ManualApproval",
+        "actionTypeId": {
+          "category": "Approval", "owner": "AWS",
+          "provider": "Manual", "version": "1"
+        },
+        "configuration": {
+          "CustomData": "'"${ENV}"'環境へのデプロイを承認してください。CloudFormation変更内容を確認の上、承認/拒否してください。"
+        }
+      }]
+    },
+    {
+      "name": "Deploy",
+      "actions": [{
+        "name": "Deploy",
+        "actionTypeId": {
+          "category": "Build", "owner": "AWS",
+          "provider": "CodeBuild", "version": "1"
+        },
+        "configuration": {
+          "ProjectName": "'"${BUILD_PROJECT}"'"
+        },
+        "inputArtifacts": [{"name": "SourceOutput"}]
+      }]
+    }'
+  fi
+
+  STAGES="${STAGES}]"
+
+  # パイプラインJSON生成
+  cat > /tmp/pipeline-${ENV}.json << PIPELINEJSON
+{
+  "pipeline": {
+    "name": "${PIPELINE_NAME}",
+    "roleArn": "${ROLE_ARN}",
+    "artifactStore": {
+      "type": "S3",
+      "location": "${ARTIFACT_BUCKET}"
+    },
+    "stages": ${STAGES},
+    "pipelineType": "V2"
+  }
+}
+PIPELINEJSON
+
+  aws codepipeline create-pipeline \
+    --cli-input-json file:///tmp/pipeline-${ENV}.json
+
+  echo "Created Pipeline: ${PIPELINE_NAME}"
+  echo "  Console: https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${PIPELINE_NAME}/view"
+}
+
+# --- 各環境のパイプラインを作成 ---
+create_pipeline "dev" "false"    # dev: 自動デプロイ（承認なし）
+create_pipeline "stg" "true"     # stg: 手動承認あり
+create_pipeline "prod" "true"    # prod: 手動承認あり
+```
+
+> **ポイント**:
+> - **dev**: Source → Build の2ステージ。コードプッシュで即座にデプロイされる
+> - **stg / prod**: Source → Build(検証) → Approval(手動承認) → Deploy の4ステージ
+> - Build ステージの `ENVIRONMENT` 環境変数で、どの `environments/*.json` を使うかが決まる
+
+#### Step 10: EventBridgeルール作成（CodeCommit変更検知）
+
+CodePipeline V2の `PollForSourceChanges: false` 設定に対応して、EventBridgeで変更を検知します。
+
+```bash
+for ENV in dev stg prod; do
+  PIPELINE_NAME="${SYSTEM_NAME}-${ENV}-pipeline"
+
+  aws events put-rule \
+    --name "${PIPELINE_NAME}-trigger" \
+    --event-pattern '{
+      "source": ["aws.codecommit"],
+      "detail-type": ["CodeCommit Repository State Change"],
+      "resources": ["arn:aws:codecommit:'"${REGION}"':'"${ACCOUNT_ID}"':'"${REPO_NAME}"'"],
+      "detail": {
+        "referenceType": ["branch"],
+        "referenceName": ["main"]
+      }
+    }' 2>/dev/null || true
+
+  # EventBridge → CodePipeline のIAMロール
+  EVENTS_ROLE="events-${PIPELINE_NAME}-role"
+  aws iam create-role \
+    --role-name ${EVENTS_ROLE} \
+    --assume-role-policy-document '{
+      "Version":"2012-10-17",
+      "Statement":[{
+        "Effect":"Allow",
+        "Principal":{"Service":"events.amazonaws.com"},
+        "Action":"sts:AssumeRole"
+      }]
+    }' 2>/dev/null || true
+
+  aws iam put-role-policy \
+    --role-name ${EVENTS_ROLE} \
+    --policy-name AllowStartPipeline \
+    --policy-document '{
+      "Version":"2012-10-17",
+      "Statement":[{
+        "Effect":"Allow",
+        "Action":"codepipeline:StartPipelineExecution",
+        "Resource":"arn:aws:codepipeline:'"${REGION}"':'"${ACCOUNT_ID}"':'"${PIPELINE_NAME}"'"
+      }]
+    }' 2>/dev/null || true
+
+  aws events put-targets \
+    --rule "${PIPELINE_NAME}-trigger" \
+    --targets "Id=1,Arn=arn:aws:codepipeline:${REGION}:${ACCOUNT_ID}:${PIPELINE_NAME},RoleArn=arn:aws:iam::${ACCOUNT_ID}:role/${EVENTS_ROLE}" \
+    2>/dev/null || true
+
+  echo "EventBridge trigger created for: ${PIPELINE_NAME}"
+done
+```
+
+#### 構築結果の確認
+
+```bash
+echo ""
+echo "============================================"
+echo "  Multi-Environment Setup Complete!"
+echo "============================================"
+echo ""
+echo "CodeCommit: ${REPO_NAME}"
+echo "  URL: ${REPO_URL}"
+echo ""
+echo "Pipelines:"
+for ENV in dev stg prod; do
+  echo "  ${SYSTEM_NAME}-${ENV}-pipeline"
+  echo "    https://${REGION}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${SYSTEM_NAME}-${ENV}-pipeline/view"
+done
+echo ""
+echo "CodeBuild Projects:"
+for ENV in dev stg prod; do
+  echo "  ${SYSTEM_NAME}-${ENV}-build"
+done
+echo ""
+echo "CloudFormation Stacks (after first pipeline run):"
+for ENV in dev stg prod; do
+  for STACK in network security storage; do
+    echo "  ${SYSTEM_NAME}-${ENV}-${STACK}"
+  done
+done
+echo ""
+echo "Next steps:"
+echo "  1. dev パイプラインが自動実行 → dev環境のスタックが作成される"
+echo "  2. stg/prod は手動承認を実施して環境構築"
+echo "  3. stacks/ にテンプレートを追加して environments/*.json を更新するだけで拡張可能"
+```
+
+#### 実行手順まとめ
+
+上記の Step 0〜10 を 1つのシェルスクリプトにまとめて実行できます。
+
+```bash
+# スクリプトとして保存
+cat Step0〜10 > setup-multi-env.sh
+chmod +x setup-multi-env.sh
+
+# 実行（約2-3分）
+./setup-multi-env.sh
+```
+
+**作成されるリソース一覧**:
+
+| リソース | 数 | 名前パターン |
+|---------|---|------------|
+| CodeCommit リポジトリ | 1 | `system-a-infra` |
+| S3 アーティファクトバケット | 1 | `codepipeline-{region}-{account}` |
+| IAM ロール (CodeBuild) | 3 | `system-a-{dev,stg,prod}-codebuild-role` |
+| IAM ロール (Pipeline) | 3 | `system-a-{dev,stg,prod}-pipeline-role` |
+| IAM ロール (EventBridge) | 3 | `events-system-a-{dev,stg,prod}-pipeline-role` |
+| CodeBuild プロジェクト | 3 | `system-a-{dev,stg,prod}-build` |
+| CodePipeline | 3 | `system-a-{dev,stg,prod}-pipeline` |
+| EventBridge ルール | 3 | `system-a-{dev,stg,prod}-pipeline-trigger` |
+| CloudFormation スタック | 9 | `system-a-{env}-{network,security,storage}` |
+
+#### クリーンアップ
+
+```bash
+# === 全リソース削除（逆順） ===
+SYSTEM_NAME="system-a"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=${AWS_REGION:-ap-northeast-1}
+
+# 1. パイプライン削除
+for ENV in dev stg prod; do
+  aws codepipeline delete-pipeline --name ${SYSTEM_NAME}-${ENV}-pipeline 2>/dev/null || true
+done
+
+# 2. EventBridgeルール削除
+for ENV in dev stg prod; do
+  RULE="${SYSTEM_NAME}-${ENV}-pipeline-trigger"
+  aws events remove-targets --rule ${RULE} --ids 1 2>/dev/null || true
+  aws events delete-rule --name ${RULE} 2>/dev/null || true
+done
+
+# 3. CodeBuildプロジェクト削除
+for ENV in dev stg prod; do
+  aws codebuild delete-project --name ${SYSTEM_NAME}-${ENV}-build 2>/dev/null || true
+done
+
+# 4. CloudFormationスタック削除（逆順）
+for ENV in dev stg prod; do
+  for STACK in storage security network; do
+    echo "Deleting ${SYSTEM_NAME}-${ENV}-${STACK}..."
+    aws cloudformation delete-stack --stack-name ${SYSTEM_NAME}-${ENV}-${STACK} 2>/dev/null || true
+    aws cloudformation wait stack-delete-complete --stack-name ${SYSTEM_NAME}-${ENV}-${STACK} 2>/dev/null || true
+  done
+done
+
+# 5. IAMロール削除
+for ENV in dev stg prod; do
+  for SUFFIX in codebuild-role pipeline-role; do
+    ROLE="${SYSTEM_NAME}-${ENV}-${SUFFIX}"
+    # アタッチされたポリシーを全て解除
+    for ARN in $(aws iam list-attached-role-policies --role-name ${ROLE} --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+      aws iam detach-role-policy --role-name ${ROLE} --policy-arn ${ARN} 2>/dev/null || true
+    done
+    aws iam delete-role --role-name ${ROLE} 2>/dev/null || true
+  done
+  # EventBridge用ロール
+  ROLE="events-${SYSTEM_NAME}-${ENV}-pipeline-role"
+  aws iam delete-role-policy --role-name ${ROLE} --policy-name AllowStartPipeline 2>/dev/null || true
+  aws iam delete-role --role-name ${ROLE} 2>/dev/null || true
+done
+
+# 6. CodeCommitリポジトリ削除
+aws codecommit delete-repository --repository-name ${SYSTEM_NAME}-infra 2>/dev/null || true
+
+echo "Cleanup complete!"
+```
+
+---
+
 ### スタックの追加・更新手順
 
 > **検証済み**: 2026-02-02 ap-northeast-1 で動作確認済み
