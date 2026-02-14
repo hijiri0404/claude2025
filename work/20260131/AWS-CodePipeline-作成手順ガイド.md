@@ -2275,27 +2275,110 @@ git push origin main
 
 #### スタック削除の手順
 
+> **初学者向け: スタック削除はCI/CDパイプラインの管轄外**
+>
+> 本手順で構築したCI/CDパイプラインは「スタックの作成・更新」のみを担当しています。
+> **スタックの削除はパイプラインとは別に、手動で実施する作業**です。
+>
+> ```
+> 【CI/CDパイプラインの守備範囲】
+>
+> git push
+>   → CodePipeline 起動
+>     → CodeBuild が buildspec.yml を実行
+>       → aws cloudformation deploy（作成・更新のみ）
+>
+> パイプラインができること:  スタックの作成 ✅  スタックの更新 ✅
+> パイプラインができないこと: スタックの削除 ❌ ← ここは手動作業
+>
+> 【なぜ削除は手動なのか？】
+> 安全のためです。もし「stackOrderに無いスタックを自動削除」する仕組みだと、
+> JSONの編集ミス1つで本番のVPCやデータベースが消えてしまいます。
+> 削除は影響が大きいため、意図的にCI/CDから切り離されています。
+> ```
+
+##### 事前作業（削除前に必ず実施）
+
 ```bash
 # 例: 03-storage スタックを削除する場合
 
-# ステップ1: AWS上のCloudFormationスタックを手動で削除
-#   ※ 依存関係がある場合は、依存先から逆順に削除すること
-#   （例: storage → security → network の順）
+# ── 1. 削除対象のスタックに何が含まれているか確認 ──
+aws cloudformation describe-stack-resources \
+  --stack-name system-a-dev-storage \
+  --query 'StackResources[*].[ResourceType, LogicalResourceId, PhysicalResourceId]' \
+  --output table
+
+# ── 2. 重要データのバックアップ（該当する場合） ──
+#   S3バケット → 中身をバックアップしてから空にする
+#     ※ S3バケットは中身が空でないと削除できない
+aws s3 ls s3://system-a-dev-data-123456789012/
+aws s3 cp s3://system-a-dev-data-123456789012/ ./backup/ --recursive  # 必要に応じて
+
+#   DynamoDBテーブル → エクスポートまたはバックアップ作成
+aws dynamodb create-backup \
+  --table-name system-a-dev-app-data \
+  --backup-name "system-a-dev-app-data-before-delete-$(date +%Y%m%d)"
+
+# ── 3. 依存関係の確認（他のスタックから参照されていないか） ──
+#   削除対象のExport値が他スタックで使われていると削除失敗する
+aws cloudformation list-imports \
+  --export-name system-a-dev-DataBucketName 2>&1 || echo "参照なし（削除OK）"
+
+# ── 4. 削除リハーサル（任意・本番環境では推奨） ──
+#   change setを作成して削除される内容を事前確認
+aws cloudformation describe-stacks \
+  --stack-name system-a-dev-storage \
+  --query 'Stacks[0].Outputs' --output table
+```
+
+##### 削除実行
+
+```bash
+# ── 5. AWS上のCloudFormationスタックを削除 ──
 aws cloudformation delete-stack --stack-name system-a-dev-storage
 
-# 削除完了を待つ（任意）
+# ── 6. 削除完了を待つ ──
+echo "削除中... (数分かかる場合があります)"
 aws cloudformation wait stack-delete-complete --stack-name system-a-dev-storage
+echo "削除完了"
 
-# ステップ2: environments/dev.json の stackOrder から削除
+# ── 7. 削除されたことを確認 ──
+aws cloudformation describe-stacks --stack-name system-a-dev-storage 2>&1
+# → 「Stack with id system-a-dev-storage does not exist」と表示されればOK
+```
+
+##### 事後作業（削除後に必ず実施）
+
+```bash
+# ── 8. environments/dev.json の stackOrder から削除 ──
+#   ※ これをしないと、次回パイプライン実行時にデプロイしようとしてエラーになる
 jq '.stackOrder -= ["03-storage"]' environments/dev.json > tmp.json && mv tmp.json environments/dev.json
 
-# ステップ3: テンプレートファイルも削除（任意・不要なら残してもOK）
+# 変更内容を確認
+cat environments/dev.json | jq '.stackOrder'
+# → ["01-network", "02-security"] のみになっていればOK
+
+# ── 9. テンプレートファイルの削除（任意） ──
+#   今後使わないなら削除、再利用の可能性があるなら残してもOK
 rm stacks/03-storage.yaml
 
-# ステップ4: コミット & プッシュ
+# ── 10. コミット & プッシュ ──
 git add -A
 git commit -m "Remove storage stack (03-storage)"
 git push origin main
+
+# ── 11. パイプライン実行結果を確認 ──
+#   push によりパイプラインが動くが、stackOrderから消えた
+#   03-storage はスキップされ、残りのスタックのみデプロイされる
+aws codepipeline get-pipeline-state --name system-a-dev-pipeline \
+  --query 'stageStates[*].[stageName, actionStates[0].latestExecution.status]' \
+  --output table
+
+# ── 12. 他環境（stg/prod）でも同じスタックを削除する場合 ──
+#   環境ごとにステップ5〜11を繰り返す
+#   例: stg環境
+#   aws cloudformation delete-stack --stack-name system-a-stg-storage
+#   jq '.stackOrder -= ["03-storage"]' environments/stg.json > tmp.json && mv tmp.json environments/stg.json
 ```
 
 > **補足: 削除順序に注意**
@@ -2311,6 +2394,15 @@ git push origin main
 > 削除順序: 02-security → 03-storage → 01-network（参照元から先に削除）
 > 逆にすると: 01-networkを先に消そうとしても「まだ参照されている」とエラーになる
 > ```
+
+> **補足: 削除に失敗した場合**
+>
+> | 状況 | 原因 | 対処法 |
+> |------|------|--------|
+> | `DELETE_FAILED` | S3バケットが空でない | `aws s3 rm s3://bucket-name --recursive` で空にしてリトライ |
+> | `DELETE_FAILED` | 他スタックからImportValueで参照中 | 参照元スタックを先に削除 or 参照を外す |
+> | `DELETE_FAILED` | リソースが手動変更されている | マネジメントコンソールでリソースを個別削除後リトライ |
+> | ずっと `DELETE_IN_PROGRESS` | リソース削除に時間がかかっている | RDSスナップショット作成等で最大30分程度待つ |
 
 ---
 
