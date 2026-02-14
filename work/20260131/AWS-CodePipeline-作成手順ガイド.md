@@ -1270,7 +1270,7 @@ EOF
 # === 01-network.yaml（VPC + Subnet + IGW + RouteTable） ===
 cat > stacks/01-network.yaml << 'YAML'
 AWSTemplateFormatVersion: '2010-09-09'
-Description: !Sub 'Network Stack for ${SystemName}-${Environment}'
+Description: 'Network Stack'
 
 Parameters:
   Environment:
@@ -1425,7 +1425,7 @@ YAML
 # === 02-security.yaml（IAM + SecurityGroup） ===
 cat > stacks/02-security.yaml << 'YAML'
 AWSTemplateFormatVersion: '2010-09-09'
-Description: !Sub 'Security Stack for ${SystemName}-${Environment}'
+Description: 'Security Stack'
 
 Parameters:
   Environment:
@@ -1488,7 +1488,7 @@ YAML
 # === 03-storage.yaml（S3 + DynamoDB） ===
 cat > stacks/03-storage.yaml << 'YAML'
 AWSTemplateFormatVersion: '2010-09-09'
-Description: !Sub 'Storage Stack for ${SystemName}-${Environment}'
+Description: 'Storage Stack'
 
 Parameters:
   Environment:
@@ -2066,13 +2066,37 @@ git push origin main
 
 #### ケース2: 新規スタックの追加（例: DynamoDB）
 
-**必要な作業**: テンプレート作成 + environments更新 + buildspec.yml更新
+**必要な作業**: buildspec.yml の種類によって異なります。
+
+| buildspec.yml の種類 | 必要な作業 |
+|---|---|
+| **動的版（本手順で構築済み）** | テンプレート作成 + environments更新 のみ（**buildspec.yml更新不要**） |
+| 静的版 | テンプレート作成 + environments更新 + buildspec.yml更新 |
+
+> **補足: 静的版 buildspec.yml とは？**
+>
+> デプロイ対象のスタックをbuildspec.yml内にハードコードする方式です。
+> 新規スタック追加時は、buildspec.yml の `build > commands` に以下のようなデプロイコマンドを直接追記する必要があります。
+>
+> ```yaml
+> # 静的版の場合に追記が必要な内容（例）
+> - aws cloudformation deploy \
+>     --template-file stacks/06-dynamodb.yaml \
+>     --stack-name ${STACK_PREFIX}-dynamodb \
+>     --parameter-overrides Environment=${ENVIRONMENT} SystemName=${SYSTEM_NAME} \
+>     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+>     --no-fail-on-empty-changeset
+> ```
+>
+> 本手順（Step 4）で構築した **動的版 buildspec.yml** は `environments/*.json` の `stackOrder` を自動で読み取るため、この追記は不要です。
+
+##### 動的版での手順（本手順で構築した場合はこちら）
 
 ```bash
 # 1. 新しいテンプレートを作成
 cat > stacks/06-dynamodb.yaml << 'EOF'
 AWSTemplateFormatVersion: '2010-09-09'
-Description: DynamoDB Stack
+Description: 'DynamoDB Stack'
 
 Parameters:
   Environment:
@@ -2106,18 +2130,15 @@ Outputs:
 EOF
 
 # 2. environments/dev.json の stackOrder に追加
-# "stackOrder": ["01-network", "06-dynamodb"]  ← 追加
-vi environments/dev.json
+jq '.stackOrder += ["06-dynamodb"]' environments/dev.json > tmp.json && mv tmp.json environments/dev.json
+# 結果: "stackOrder": ["01-network", "02-security", "03-storage", "06-dynamodb"]
 
-# 3. buildspec.yml にデプロイコマンドを追加（静的版の場合）
-# または、動的版buildspec.ymlを使用（後述）
-
-# 4. 差分確認
+# 3. 差分確認
 git status
 git diff
 
-# 5. コミット & プッシュ
-git add stacks/06-dynamodb.yaml environments/dev.json buildspec.yml
+# 4. コミット & プッシュ（buildspec.ymlの修正は不要！）
+git add stacks/06-dynamodb.yaml environments/dev.json
 git commit -m "Add DynamoDB stack (06-dynamodb.yaml)"
 git push origin main
 
