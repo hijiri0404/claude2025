@@ -2149,6 +2149,35 @@ git push origin main
 
 `stackOrder` を自動で読み取り、新規スタック追加時に buildspec.yml の修正が不要になります。
 
+> **初学者向け: 「stackOrderを動的に読み取る」とは？**
+>
+> 静的版では、デプロイ対象のスタックを buildspec.yml に直接書き込みます（ハードコード）。
+> スタックが増えるたびに buildspec.yml を編集する必要があり、手間がかかります。
+>
+> 動的版では、`environments/dev.json` の `stackOrder` 配列を **jq コマンドで実行時に読み取り**、
+> for ループで順番にデプロイします。buildspec.yml 自体は一切変更不要です。
+>
+> ```
+> 【処理の流れ】
+>
+> environments/dev.json の中身:
+>   "stackOrder": ["01-network", "02-security", "03-storage"]
+>
+>          ↓ jq -r '.stackOrder[]' で1行ずつ取り出す
+>
+>   1回目のループ: STACK = "01-network"
+>     → stacks/01-network.yaml をデプロイ
+>   2回目のループ: STACK = "02-security"
+>     → stacks/02-security.yaml をデプロイ
+>   3回目のループ: STACK = "03-storage"
+>     → stacks/03-storage.yaml をデプロイ
+>
+> stackOrder に "06-dynamodb" を追加すれば、
+> 次回実行時に自動で4回目のループが追加される（buildspec.yml変更不要）
+> ```
+>
+> **つまり**: 「何をデプロイするか」は JSON で管理し、「どうデプロイするか」は buildspec.yml で管理する、という役割分担です。
+
 ```yaml
 version: 0.2
 
@@ -2223,7 +2252,65 @@ git push origin main
 |------|------------------|-------------------------|
 | 既存スタック更新 | テンプレートのみ修正 | テンプレートのみ修正 |
 | 新規スタック追加 | テンプレート + environments + buildspec.yml | テンプレート + environments のみ |
-| スタック削除 | buildspec.yml修正が必要 | environments から削除のみ |
+| スタック削除 | buildspec.yml修正が必要 | environments から削除 + **手動でスタック削除** |
+
+> **重要: スタック削除時の注意点**
+>
+> `stackOrder` からスタック名を削除しても、**AWS上のCloudFormationスタックは自動削除されません**。
+>
+> ```
+> 【なぜ自動削除されないのか？】
+>
+> 動的buildspec.yml の仕組み:
+>   stackOrder に書かれたスタックを順番に「デプロイ」するだけ
+>   → 書かれていないスタックは「何もしない」（スキップされる）
+>   → 削除コマンド（delete-stack）は実行されない
+>
+> つまり:
+>   stackOrder から削除 = 「今後デプロイしない」であって「AWS上から消す」ではない
+> ```
+>
+> **安全のためにこの設計になっています。** 誤って stackOrder から消してしまっても、
+> 本番環境のリソース（VPC、データベース等）がいきなり削除されることはありません。
+
+#### スタック削除の手順
+
+```bash
+# 例: 03-storage スタックを削除する場合
+
+# ステップ1: AWS上のCloudFormationスタックを手動で削除
+#   ※ 依存関係がある場合は、依存先から逆順に削除すること
+#   （例: storage → security → network の順）
+aws cloudformation delete-stack --stack-name system-a-dev-storage
+
+# 削除完了を待つ（任意）
+aws cloudformation wait stack-delete-complete --stack-name system-a-dev-storage
+
+# ステップ2: environments/dev.json の stackOrder から削除
+jq '.stackOrder -= ["03-storage"]' environments/dev.json > tmp.json && mv tmp.json environments/dev.json
+
+# ステップ3: テンプレートファイルも削除（任意・不要なら残してもOK）
+rm stacks/03-storage.yaml
+
+# ステップ4: コミット & プッシュ
+git add -A
+git commit -m "Remove storage stack (03-storage)"
+git push origin main
+```
+
+> **補足: 削除順序に注意**
+>
+> CloudFormationスタック間に依存関係（`!ImportValue` 等）がある場合、
+> 参照している側を先に削除する必要があります。
+>
+> ```
+> 依存関係の例（本手順の場合）:
+>   01-network ← 02-security（VpcIdをImportValue）
+>              ← 03-storage（直接の依存なし）
+>
+> 削除順序: 02-security → 03-storage → 01-network（参照元から先に削除）
+> 逆にすると: 01-networkを先に消そうとしても「まだ参照されている」とエラーになる
+> ```
 
 ---
 
